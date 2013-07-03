@@ -811,6 +811,7 @@ class Minion(object):
         enable_sigusr1_handler()
         # On first startup execute a state run if configured to do so
         self._state_run()
+        time.sleep(0.5)
 
         loop_interval = int(self.opts['loop_interval'])
         while True:
