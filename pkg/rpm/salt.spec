@@ -11,8 +11,8 @@
 %{!?python_sitearch: %global python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
 
 Name: salt
-Version: 0.15.0
-Release: 1%{?dist}
+Version: %{salt_version}
+Release: %{buildid}%{?dist}
 Summary: A parallel remote execution system
 
 Group:   System Environment/Daemons
