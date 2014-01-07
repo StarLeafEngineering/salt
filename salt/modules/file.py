@@ -596,6 +596,10 @@ def sed(path,
     # Largely inspired by Fabric's contrib.files.sed()
     # XXX:dc: Do we really want to always force escaping?
     #
+
+    if not os.path.exists(path):
+        return False
+
     # Mandate that before and after are strings
     before = str(before)
     after = str(after)
@@ -969,6 +973,9 @@ def replace(path,
         pre_user = get_user(path)
         pre_group = get_group(path)
         pre_mode = __salt__['config.manage_mode'](get_mode(path))
+
+    # Avoid TypeErrors by forcing repl to be a string
+    repl = str(repl)
     for line in fileinput.input(path,
             inplace=not dry_run, backup=False if dry_run else backup,
             bufsize=bufsize, mode='rb'):
@@ -1656,11 +1663,7 @@ def get_managed(
     return sfn, source_sum, ''
 
 
-def check_perms(name,
-                ret,
-                user,
-                group,
-                mode):
+def check_perms(name, ret, user, group, mode):
     '''
     Check the permissions on files and chown if needed
 
@@ -2104,7 +2107,7 @@ def manage_file(name,
             # Create the file, user rw-only if mode will be set to prevent
             # a small security race problem before the permissions are set
             if mode:
-                current_umask = os.umask(63)
+                current_umask = os.umask(077)
 
             # Create a new file when test is False and source is None
             if contents is None:
@@ -2134,12 +2137,10 @@ def manage_file(name,
             with salt.utils.fopen(tmp, 'w') as tmp_:
                 tmp_.write(str(contents))
             # Copy into place
-            current_umask = os.umask(63)
             salt.utils.copyfile(tmp,
                                 name,
                                 __salt__['config.backup_mode'](backup),
                                 __opts__['cachedir'])
-            os.umask(current_umask)
             __clean_tmp(tmp)
         # Now copy the file contents if there is a source file
         elif sfn:
@@ -2149,7 +2150,14 @@ def manage_file(name,
                                 __opts__['cachedir'])
             __clean_tmp(sfn)
 
-        # Check and set the permissions if necessary
+        # This is a new file, if no mode specified, use the umask to figure
+        # out what mode to use for the new file.
+        if mode is None:
+            # Get current umask
+            mask = os.umask(0)
+            os.umask(mask)
+            # Calculate the mode value that results from the umask
+            mode = oct((0777 ^ mask) & 0666)
         ret, perms = check_perms(name, ret, user, group, mode)
 
         if not ret['comment']:

@@ -11,6 +11,7 @@ import re
 
 # Import salt libs
 import salt.utils
+from salt.exceptions import SaltInvocationError
 from salt.utils import namespaced_function as _namespaced_function
 from salt.modules.yumpkg import (mod_repo, _parse_repo_file, list_repos,
                                  get_repo, expand_repo_def, del_repo)
@@ -25,6 +26,9 @@ log = logging.getLogger(__name__)
 # it without considering its impact there.
 __QUERYFORMAT = '%{NAME}_|-%{VERSION}_|-%{RELEASE}_|-%{ARCH}'
 
+# From rpmUtils.arch.getArchList() (not necessarily available on RHEL/CentOS 5)
+__ALL_ARCHES = ('ia32e', 'x86_64', 'athlon', 'i686', 'i586', 'i486', 'i386',
+                'noarch')
 __SUFFIX_NOT_NEEDED = ('x86_64', 'noarch')
 
 # Define the module's virtual name
@@ -55,6 +59,8 @@ def __virtual__():
     elif os_grain == 'XenServer':
         if os_major_version <= 6:
             valid = True
+    elif os_grain == 'Amazon':
+        valid = True
     else:
         # RHEL <= 5 and all variants need to use this module
         if os_family == 'RedHat' and os_major_version <= 5:
@@ -155,13 +161,14 @@ def _pkg_arch(name):
     architecture specified in the passed string.
     '''
     # TODO: Fix __grains__ availability in provider overrides
+    if not any(name.endswith('.{0}'.format(x)) for x in __ALL_ARCHES):
+        return name, __grains__['cpuarch']
     try:
         pkgname, pkgarch = name.rsplit('.', 1)
     except ValueError:
         return name, __grains__['cpuarch']
-    if pkgarch in __SUFFIX_NOT_NEEDED:
-        pkgname = name
-    return pkgname, pkgarch
+    else:
+        return pkgname, pkgarch
 
 
 def latest_version(*names, **kwargs):
