@@ -205,6 +205,7 @@ rm -rf $RPM_BUILD_ROOT
 %doc %{_mandir}/man1/salt-run.1.*
 %doc %{_mandir}/man1/salt-ssh.1.*
 %doc %{_mandir}/man1/salt-syndic.1.*
+%doc %{_mandir}/man1/salt-cloud.1.*
 %{_bindir}/salt
 %{_bindir}/salt-cp
 %{_bindir}/salt-key
@@ -212,6 +213,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/salt-run
 %{_bindir}/salt-ssh
 %{_bindir}/salt-syndic
+%{_bindir}/salt-cloud
 %if ! (0%{?rhel} >= 7 || 0%{?fedora} >= 15)
 %attr(0755, root, root) %{_initrddir}/salt-master
 %attr(0755, root, root) %{_initrddir}/salt-syndic
