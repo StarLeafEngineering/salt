@@ -517,7 +517,7 @@ def script(vm_):
     '''
     Return the script deployment object
     '''
-    script = salt.utils.cloud.os_script(
+    deploy_script = salt.utils.cloud.os_script(
         config.get_cloud_config_value('script', vm_, __opts__),
         vm_,
         __opts__,
@@ -525,7 +525,7 @@ def script(vm_):
             salt.utils.cloud.minion_config(__opts__, vm_)
         )
     )
-    return script
+    return deploy_script
 
 
 def show_instance(name, call=None):
@@ -540,7 +540,7 @@ def show_instance(name, call=None):
     return _get_node(name)
 
 
-def _get_node(name, location=None):
+def _get_node(name):
     attempts = 10
     while attempts >= 0:
         try:
