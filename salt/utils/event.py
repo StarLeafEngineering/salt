@@ -117,7 +117,7 @@ def tagify(suffix='', prefix='', base=SALT):
         parts.extend(suffix)
     else:  # string so append
         parts.append(suffix)
-    return (TAGPARTER.join([part for part in parts if part]))
+    return TAGPARTER.join([part for part in parts if part])
 
 
 class SaltEvent(object):
@@ -333,6 +333,14 @@ class SaltEvent(object):
                 self.poller.unregister(socket[0])
         if self.context.closed is False:
             self.context.term()
+
+        # Hardcore destruction
+        if hasattr(self.context, 'destroy'):
+            self.context.destroy(linger=1)
+
+        # https://github.com/zeromq/pyzmq/issues/173#issuecomment-4037083
+        # Assertion failed: get_load () == 0 (poller_base.cpp:32)
+        time.sleep(0.025)
 
     def fire_ret_load(self, load):
         '''

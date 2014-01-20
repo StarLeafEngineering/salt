@@ -25,7 +25,7 @@ Module to provide MySQL compatibility to salt.
 
         mysql.default_file: '/etc/mysql/debian.cnf'
 
-.. versionchanged:: Hydrogen
+.. versionchanged:: 2014.1.0 (Hydrogen)
     charset connection argument added. This is a MySQL charset, not a python one
 .. versionchanged:: 0.16.2
     Connection arguments from the minion config file can be overridden on the
@@ -1780,7 +1780,7 @@ def get_master_status(**connection_args):
     conn.close()
 
     # check for if this minion is not a master
-    if (len(rtnv) == 0):
+    if len(rtnv) == 0:
         rtnv.append([])
 
     log.debug('{0}-->{1}'.format(mod, len(rtnv[0])))
@@ -1848,7 +1848,7 @@ def get_slave_status(**connection_args):
     conn.close()
 
     # check for if this minion is not a slave
-    if (len(rtnv) == 0):
+    if len(rtnv) == 0:
         rtnv.append([])
 
     log.debug('{0}-->{1}'.format(mod, len(rtnv[0])))

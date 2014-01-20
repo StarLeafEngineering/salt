@@ -131,6 +131,22 @@ executed when the state it is watching changes. Example:
         - installed
         - require:
           - file: /usr/local/bin/postinstall.sh
+
+How do I create a environment from a pillar map?
+---------------------------------------------------------------------------------------------
+
+The map that comes from a pillar cannot be directly consumed by the env option. To use it
+one must convert it to a list. Example:
+
+.. code-block:: yaml
+
+    printenv:
+    cmd.run:
+        - env:
+            {% for key, value in pillar['keys'].iteritems() %}
+             - '{{ key }}': '{{ value }}'
+            {% endfor %}
+
 '''
 
 # Import python libs
@@ -466,7 +482,7 @@ def run(name,
     quiet
         The command will be executed quietly, meaning no log entries of the
         actual command or its return data. This is deprecated as of the
-        **Hydrogen** release, and is being replaced with
+        **2014.1.0 (Hydrogen)** release, and is being replaced with
         ``output_loglevel: quiet``.
 
     timeout
@@ -503,7 +519,7 @@ def run(name,
            'comment': ''}
 
     if cwd and not os.path.isdir(cwd):
-        ret['comment'] = 'Desired working directory is not available'
+        ret['comment'] = 'Desired working directory "{0}" is not available'.format(cwd)
         return ret
 
     if env:
@@ -667,7 +683,7 @@ def script(name,
            'result': False}
 
     if cwd and not os.path.isdir(cwd):
-        ret['comment'] = 'Desired working directory is not available'
+        ret['comment'] = 'Desired working directory "{0}" is not available'.format(cwd)
         return ret
 
     if isinstance(env, string_types):

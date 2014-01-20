@@ -200,7 +200,7 @@ def get_mode(path):
     '''
     Return the mode of a file
 
-    Right now we're just returning 777
+    Right now we're just returning None
     because Windows' doesn't have a mode
     like Linux
 
@@ -212,8 +212,7 @@ def get_mode(path):
     '''
     if not os.path.exists(path):
         return -1
-    mode = 777
-    return mode
+    return None
 
 
 def get_user(path):
@@ -296,7 +295,7 @@ def chgrp(path, group):
     return None
 
 
-def stats(path, hash_type='md5', follow_symlink=False):
+def stats(path, hash_type='md5', follow_symlinks=False):
     '''
     Return a dict containing the stats for a given file
 
@@ -309,7 +308,7 @@ def stats(path, hash_type='md5', follow_symlink=False):
     ret = {}
     if not os.path.exists(path):
         return ret
-    if follow_symlink:
+    if follow_symlinks:
         pstat = os.stat(path)
     else:
         pstat = os.lstat(path)
@@ -460,3 +459,19 @@ def set_attributes(path, archive=None, hidden=None, normal=None,
         else:
             intAttributes &= 0xFEFF
     return win32file.SetFileAttributes(path, intAttributes)
+
+
+def set_mode(path, mode):
+    '''
+    Set the mode of a file
+
+    This just calls get_mode, which returns None because we don't use mode on
+    Windows
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' file.set_mode /etc/passwd 0644
+    '''
+    return get_mode(path)

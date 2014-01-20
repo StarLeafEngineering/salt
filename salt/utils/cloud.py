@@ -864,6 +864,10 @@ def fire_event(key, msg, tag, args=None, sock_dir=None):
             args = {key: msg}
         event.fire_event(args, tag)
 
+    # https://github.com/zeromq/pyzmq/issues/173#issuecomment-4037083
+    # Assertion failed: get_load () == 0 (poller_base.cpp:32)
+    time.sleep(0.025)
+
 
 def scp_file(dest_path, contents, kwargs):
     '''
@@ -1189,6 +1193,7 @@ def wait_for_ip(update_callback,
                 update_kwargs=None,
                 timeout=5 * 60,
                 interval=5,
+                interval_multiplier=1,
                 max_failures=10):
     '''
     Helper function that waits for an IP address for a specific maximum amount
@@ -1203,6 +1208,8 @@ def wait_for_ip(update_callback,
                     address.
     :param interval: The looping interval, ie, the amount of time to sleep
                      before the next iteration.
+    :param interval_multiplier: Increase the interval by this multiplier after
+                                each request; helps with throttling
     :param max_failures: If update_callback returns ``False`` it's considered
                          query failure. This value is the amount of failures
                          accepted before giving up.
@@ -1247,6 +1254,13 @@ def wait_for_ip(update_callback,
             )
         time.sleep(interval)
         timeout -= interval
+
+        if interval_multiplier > 1:
+            interval *= interval_multiplier
+            if interval > timeout:
+                interval = timeout + 1
+            log.info('Interval multiplier in effect; interval is '
+                     'now {0}s'.format(interval))
 
 
 def simple_types_filter(datadict):
