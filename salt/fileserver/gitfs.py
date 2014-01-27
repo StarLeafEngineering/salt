@@ -128,12 +128,26 @@ def init():
         if not os.path.isdir(rp_):
             os.makedirs(rp_)
 
-        try:
+        if not os.listdir(rp_):
             repo = git.Repo.init(rp_)
-        except Exception as e:
-            log.error('GitPython exception caught while initializing the repo '
-                      'for gitfs: {0}. Maybe git is not available.'.format(e))
-            return repos
+        else:
+            try:
+                repo = git.Repo(rp_)
+            except git.exc.InvalidGitRepositoryError:
+                log.error(
+                    'Cache path {0} (corresponding remote: {1}) exists but '
+                    'is not a valid git repository. You will need to manually '
+                    'delete this directory on the master to continue to use '
+                    'this gitfs remote.'.format(rp_, opt)
+                )
+                continue
+            except Exception as exc:
+                log.error(
+                    'GitPython exception caught while initializing repo {0}'
+                    'for gitfs: {1}. Perhaps git is not available.'
+                    .format(opt, exc)
+                )
+                continue
 
         if not repo.remotes:
             try:
@@ -166,7 +180,8 @@ def purge_cache():
             remove_dirs.remove(repo_hash)
         except ValueError:
             pass
-    remove_dirs = [os.path.join(bp_, r) for r in remove_dirs if r not in ('hash', 'refs')]
+    remove_dirs = [os.path.join(bp_, r) for r in remove_dirs
+                   if r not in ('hash', 'refs', 'envs.p')]
     if remove_dirs:
         for r in remove_dirs:
             shutil.rmtree(r)
@@ -201,6 +216,14 @@ def update():
         except (IOError, OSError):
             pass
 
+    env_cache = os.path.join(__opts__['cachedir'], 'gitfs/envs.p')
+    if data.get('changed', False) is True or not os.path.isfile(env_cache):
+        new_envs = envs(ignore_cache=True)
+        serial = salt.payload.Serial(__opts__)
+        with salt.utils.fopen(env_cache, 'w+') as fp_:
+            fp_.write(serial.dumps(new_envs))
+            log.trace('Wrote env cache data to {0}'.format(env_cache))
+
     # if there is a change, fire an event
     if __opts__.get('fileserver_events', False):
         event = salt.utils.event.MasterEvent(__opts__['sock_dir'])
@@ -215,10 +238,15 @@ def update():
         pass
 
 
-def envs():
+def envs(ignore_cache=False):
     '''
     Return a list of refs that can be used as environments
     '''
+    if not ignore_cache:
+        env_cache = os.path.join(__opts__['cachedir'], 'gitfs/envs.p')
+        cache_match = salt.fileserver.check_env_cache(__opts__, env_cache)
+        if cache_match is not None:
+            return cache_match
     base_branch = __opts__['gitfs_base']
     ret = set()
     repos = init()

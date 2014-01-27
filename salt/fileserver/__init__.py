@@ -28,6 +28,18 @@ def _lock_cache(w_lock):
         log.trace('Lockfile {0} created'.format(w_lock))
         return True
 
+def _lock_cache(w_lock):
+    try:
+        os.mkdir(w_lock)
+    except OSError, e:
+        if e.errno != errno.EEXIST:
+            raise
+        return False
+    else:
+        log.trace('Lockfile {0} created'.format(w_lock))
+        return True
+
+
 def check_file_list_cache(opts, form, list_cache, w_lock):
     '''
     Checks the cache file to see if there is a new enough file list cache, and
@@ -74,8 +86,27 @@ def write_file_list_cache(opts, data, list_cache, w_lock):
     serial = salt.payload.Serial(opts)
     with salt.utils.fopen(list_cache, 'w+') as fp_:
         fp_.write(serial.dumps(data))
-        os.rmdir(w_lock)
+        try:
+            os.rmdir(w_lock)
+        except OSError, e:
+            log.trace("Error removing lockfile {0}:  {1}".format(w_lock, e))
         log.trace('Lockfile {0} removed'.format(w_lock))
+
+
+def check_env_cache(opts, env_cache):
+    '''
+    Returns cached env names, if present. Otherwise returns None.
+    '''
+    if not os.path.isfile(env_cache):
+        return None
+    try:
+        with salt.utils.fopen(env_cache, 'r') as fp_:
+            log.trace('Returning env cache data from {0}'.format(env_cache))
+            serial = salt.payload.Serial(opts)
+            return serial.load(fp_)
+    except (IOError, OSError):
+        pass
+    return None
 
 
 def generate_mtime_map(path_map):

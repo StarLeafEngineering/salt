@@ -194,6 +194,8 @@ DEFAULT_MINION_OPTS = {
     'id': None,
     'cachedir': os.path.join(salt.syspaths.CACHE_DIR, 'minion'),
     'cache_jobs': False,
+    'grains_cache': False,
+    'grains_cache_expiration': 300,
     'conf_file': os.path.join(salt.syspaths.CONFIG_DIR, 'minion'),
     'sock_dir': os.path.join(salt.syspaths.SOCK_DIR, 'minion'),
     'backup_mode': '',
@@ -1645,7 +1647,8 @@ def get_id(root_dir=None, minion_id=False, cache=True):
             with salt.utils.fopen(id_cache) as idf:
                 name = idf.read().strip()
             if name:
-                log.info('Using cached minion ID: {0}'.format(name))
+                log.info('Using cached minion ID from {0}: {1}'
+                         .format(id_cache, name))
                 return name, False
         except (IOError, OSError):
             pass

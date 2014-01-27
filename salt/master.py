@@ -130,10 +130,10 @@ class SMaster(object):
                     user
                 )
             )
-            cumask = os.umask(191)
+
             if user not in users:
                 try:
-                    founduser = pwd.getpwnam(user)
+                    user = pwd.getpwnam(user)
                 except KeyError:
                     log.error('ACL user {0} is not available'.format(user))
                     continue
@@ -146,6 +146,7 @@ class SMaster(object):
                 os.unlink(keyfile)
 
             key = salt.crypt.Crypticle.generate_key_string()
+            cumask = os.umask(191)
             with salt.utils.fopen(keyfile, 'w+') as fp_:
                 fp_.write(key)
             os.umask(cumask)
@@ -226,7 +227,7 @@ class Master(SMaster):
                                 shutil.rmtree(f_path)
 
             if self.opts.get('publish_session'):
-                if now - rotate >= self.opts['publish_session'] * 60:
+                if now - rotate >= self.opts['publish_session']:
                     salt.crypt.dropfile(self.opts['cachedir'])
                     rotate = now
             if self.opts.get('search'):
@@ -1306,27 +1307,28 @@ class AESFuncs(object):
                 self.opts['cachedir'],
                 self.opts['hash_type']
                 )
-        if not os.path.isdir(jid_dir):
-            log.error(
-                'An inconsistency occurred, a job was received with a job id '
-                'that is not present on the master: {jid}'.format(**load)
-            )
-            return False
         if os.path.exists(os.path.join(jid_dir, 'nocache')):
             return
         hn_dir = os.path.join(jid_dir, load['id'])
-        if not os.path.isdir(hn_dir):
-            os.makedirs(hn_dir)
-        # Otherwise the minion has already returned this jid and it should
-        # be dropped
-        else:
-            log.error(
-                'An extra return was detected from minion {0}, please verify '
-                'the minion, this could be a replay attack'.format(
-                    load['id']
+        try:
+            os.mkdir(hn_dir)
+        except OSError as e:
+            if e.errno == errno.EEXIST:
+                # Minion has already returned this jid and it should be dropped
+                log.error(
+                    'An extra return was detected from minion {0}, please verify '
+                    'the minion, this could be a replay attack'.format(
+                        load['id']
+                    )
                 )
-            )
-            return False
+                return False
+            elif e.errno == errno.ENOENT:
+                log.error(
+                    'An inconsistency occurred, a job was received with a job id '
+                    'that is not present on the master: {jid}'.format(**load)
+                )
+                return False
+            raise
 
         self.serial.dump(
             load['return'],
