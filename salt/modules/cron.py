@@ -64,7 +64,7 @@ def _get_cron_cmdstr(user, path):
     Returns a platform-specific format string, to be used to build a crontab
     command.
     '''
-    if __grains__['os'] == 'Solaris':
+    if __grains__['os_family'] == 'Solaris':
         return 'su - {0} -c "crontab {1}"'.format(user, path)
     else:
         return 'crontab -u {0} {1}'.format(user, path)
@@ -103,7 +103,7 @@ def _write_cron_lines(user, lines):
     path = salt.utils.mkstemp()
     with salt.utils.fopen(path, 'w+') as fp_:
         fp_.writelines(lines)
-    if __grains__['os'] == 'Solaris' and user != "root":
+    if __grains__.get('os_family') in ('Solaris', 'AIX') and user != "root":
         __salt__['cmd.run']('chown {0} {1}'.format(user, path))
     ret = __salt__['cmd.run_all'](_get_cron_cmdstr(user, path))
     os.remove(path)
@@ -130,7 +130,7 @@ def raw_cron(user):
 
         salt '*' cron.raw_cron root
     '''
-    if __grains__['os'] == 'Solaris':
+    if __grains__.get('os_family') in ('Solaris', 'AIX'):
         cmd = 'crontab -l {0}'.format(user)
     else:
         cmd = 'crontab -l -u {0}'.format(user)
@@ -391,7 +391,6 @@ def set_env(user, name, value=None):
                 else:
                     return jret
             return 'present'
-    print(value)
     env = {'name': name, 'value': value}
     lst['env'].append(env)
     comdat = _write_cron_lines(user, _render_tab(lst))

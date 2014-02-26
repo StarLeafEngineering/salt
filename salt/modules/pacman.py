@@ -328,11 +328,13 @@ def install(name=None,
                 log.error(problem)
             return {}
 
+        # It is critical that -Syu is run instead of -Sy:
+        # http://gist.io/5660494
         if salt.utils.is_true(refresh):
-            cmd = 'pacman -Syu --noprogressbar --noconfirm ' \
+            cmd = 'pacman -Syu --noprogressbar --noconfirm --needed ' \
                   '"{0}"'.format('" "'.join(targets))
         else:
-            cmd = 'pacman -S --noprogressbar --noconfirm ' \
+            cmd = 'pacman -S --noprogressbar --noconfirm --needed ' \
                   '"{0}"'.format('" "'.join(targets))
 
     old = list_pkgs()

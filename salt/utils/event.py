@@ -249,8 +249,9 @@ class SaltEvent(object):
             else:
                 return evt['data']
 
-        start = int(time.time())
-        while not wait or int(time.time()) <= start + wait:
+        start = time.time()
+        timeout_at = start + wait
+        while not wait or time.time() <= timeout_at:
             socks = dict(self.poller.poll(wait * 1000))  # convert to milliseconds
             if socks.get(self.sub) != zmq.POLLIN:
                 continue
@@ -265,6 +266,7 @@ class SaltEvent(object):
 
             if not ret['tag'].startswith(tag):  # tag not match
                 self.pending_events.append(ret)
+                wait = timeout_at - time.time()
                 continue
 
             if full:

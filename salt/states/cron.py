@@ -139,7 +139,7 @@ def _get_cron_info():
     elif __grains__['os'] == 'OpenBSD':
         group = 'crontab'
         crontab_dir = '/var/cron/tabs'
-    elif __grains__['os'] == 'Solaris':
+    elif __grains__['os_family'] == 'Solaris':
         group = 'root'
         crontab_dir = '/var/spool/cron/crontabs'
     elif __grains__['os'] == 'MacOS':
@@ -346,7 +346,7 @@ def file(name,
         Overrides the default backup mode for the user's crontab.
     '''
     # Initial set up
-    mode = __salt__['config.manage_mode'](600)
+    mode = __salt__['config.manage_mode']('0600')
     owner, group, crontab_dir = _get_cron_info()
 
     cron_path = salt.utils.mkstemp()

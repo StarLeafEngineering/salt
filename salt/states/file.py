@@ -501,7 +501,7 @@ def _check_symlink_ownership(path, user, group):
     Check if the symlink ownership matches the specified user and group
     '''
     cur_user, cur_group = _get_symlink_ownership(path)
-    return ((cur_user == user) and (cur_group == group))
+    return (cur_user == user) and (cur_group == group)
 
 
 def _set_symlink_ownership(path, uid, gid):
@@ -725,14 +725,14 @@ def symlink(
         The location that the symlink points to
 
     force
-        If the target of the symlink exists and is not a symlink and
+        If the name of the symlink exists and is not a symlink and
         force is set to False, the state will fail. If force is set to
         True, the file or directory in the way of the symlink file
         will be deleted to make room for the symlink, unless
         backupname is set, when it will be renamed
 
     backupname
-        If the target of the symlink exists and is not a symlink, it will be
+        If the name of the symlink exists and is not a symlink, it will be
         renamed to the backupname. If the backupname already
         exists and force is False, the state will fail. Otherwise, the
         backupname will be removed first.
@@ -1034,6 +1034,7 @@ def managed(name,
 
             /etc/rc.conf ef6e82e4006dee563d98ada2a2a80a27
             sha254c8525aee419eb649f0233be91c151178b30f0dff8ebbdcc8de71b1d5c8bcc06a  /etc/resolv.conf
+            ead48423703509d37c4a90e6a0d53e143b6fc268
 
         Known issues:
             If the remote server URL has the hash file as an apparent
@@ -1698,8 +1699,8 @@ def recurse(name,
     if source_rel not in __salt__['cp.list_master_dirs'](__env__):
         ret['result'] = False
         ret['comment'] = (
-            'The directory {0!r} does not exist on the salt fileserver'
-            .format(source)
+            'The directory {0!r} does not exist on the salt fileserver '
+            'in environment {1!r}'.format(source, __env__)
         )
         return ret
 
@@ -2907,6 +2908,37 @@ def accumulated(name, filename, text, **kwargs):
     require_in / watch_in
         One of them required for sure we fill up accumulator before we manage
         the file. Probably the same as filename
+
+    Example:
+
+    Given the following::
+
+        animals_doing_things:
+          file.accumulated:
+            - filename: /tmp/animal_file.txt
+            - text: ' jumps over the lazy dog.'
+            - require_in:
+              - file: animal_file
+
+        animal_file:
+          file.managed:
+            - name: /tmp/animal_file.txt
+            - source: salt://animal_file.txt
+            - template: jinja
+
+    One might write a template for animal_file.txt like the following::
+
+        The quick brown fox{% for animal in accumulator['animals_doing_things'] %}{{ animal }}{% endfor %}
+
+    Collectively, the above states and template file will produce::
+
+        The quick brown fox jumps over the lazy dog.
+
+    Multiple accumulators can be "chained" together.
+
+    .. note::
+        The 'accumulator' data structure is a Python dictionary.
+        Do not expect any loop over the keys in a deterministic order!
     '''
     ret = {
         'name': name,

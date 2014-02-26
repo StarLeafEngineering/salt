@@ -42,11 +42,7 @@ def __virtual__():
     '''
     Only load if gitpython is available
     '''
-    if not isinstance(__opts__['gitfs_remotes'], list):
-        return False
-    if not isinstance(__opts__['gitfs_root'], str):
-        return False
-    if not 'git' in __opts__['fileserver_backend']:
+    if not __virtualname__ in __opts__['fileserver_backend']:
         return False
     if not HAS_GIT:
         log.error('Git fileserver backend is enabled in configuration but '
@@ -228,7 +224,7 @@ def update():
     if data.get('changed', False) is True or not os.path.isfile(env_cache):
         new_envs = envs(ignore_cache=True)
         serial = salt.payload.Serial(__opts__)
-        with salt.utils.fopen(env_cache, 'w+') as fp_:
+        with salt.utils.fopen(env_cache, 'w+b') as fp_:
             fp_.write(serial.dumps(new_envs))
             log.trace('Wrote env cache data to {0}'.format(env_cache))
 

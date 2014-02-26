@@ -30,6 +30,7 @@ The data structure needs to be:
 # This means that the primary client to build is, the LocalClient
 
 # Import python libs
+from __future__ import print_function
 import os
 import glob
 import time
@@ -183,7 +184,6 @@ class LocalClient(object):
         Return the information about a given job
         '''
         log.debug('Checking whether jid %s is still running', jid)
-        
         timeout = self.opts['gather_job_timeout']
 
         arg = [jid]
@@ -760,7 +760,7 @@ class LocalClient(object):
                         try:
                             check = True
                             ret_data = self.serial.load(
-                                salt.utils.fopen(retp, 'r')
+                                salt.utils.fopen(retp, 'rb')
                             )
                             if ret_data is None:
                                 # Sometimes the ret data is read at the wrong
@@ -770,7 +770,7 @@ class LocalClient(object):
                             ret[fn_] = {'ret': ret_data}
                             if os.path.isfile(outp):
                                 ret[fn_]['out'] = self.serial.load(
-                                    salt.utils.fopen(outp, 'r')
+                                    salt.utils.fopen(outp, 'rb')
                                 )
                         except Exception:
                             pass
@@ -910,7 +910,7 @@ class LocalClient(object):
             if last_time:
                 if len(found) < len(minions):
                     log.info('jid %s minions %s did not return in time',
-                             jid, (minions -found))
+                             jid, (minions - found))
                 break
             if int(time.time()) > timeout_at:
                 # The timeout has been reached, check the jid to see if the
@@ -1015,11 +1015,11 @@ class LocalClient(object):
                     while fn_ not in ret:
                         try:
                             ret_data = self.serial.load(
-                                salt.utils.fopen(retp, 'r'))
+                                salt.utils.fopen(retp, 'rb'))
                             ret[fn_] = {'ret': ret_data}
                             if os.path.isfile(outp):
                                 ret[fn_]['out'] = self.serial.load(
-                                    salt.utils.fopen(outp, 'r'))
+                                    salt.utils.fopen(outp, 'rb'))
                         except Exception:
                             pass
             if ret and start == 999999999999:
@@ -1057,11 +1057,11 @@ class LocalClient(object):
                 while fn_ not in ret:
                     try:
                         ret_data = self.serial.load(
-                            salt.utils.fopen(retp, 'r'))
+                            salt.utils.fopen(retp, 'rb'))
                         ret[fn_] = {'ret': ret_data}
                         if os.path.isfile(outp):
                             ret[fn_]['out'] = self.serial.load(
-                                salt.utils.fopen(outp, 'r'))
+                                salt.utils.fopen(outp, 'rb'))
                     except Exception:
                         pass
         return ret
@@ -1166,7 +1166,7 @@ class LocalClient(object):
         jid_dir = salt.utils.jid_dir(jid,
                                      self.opts['cachedir'],
                                      self.opts['hash_type'])
-        start = int(time.time())
+        start = time.time()
         timeout_at = start + timeout
         found = set()
         wtag = os.path.join(jid_dir, 'wtag*')
@@ -1178,7 +1178,7 @@ class LocalClient(object):
         last_time = False
         while True:
             # Process events until timeout is reached or all minions have returned
-            time_left = timeout_at - int(time.time())
+            time_left = timeout_at - time.time()
             # Wait 0 == forever, use a minimum of 1s
             wait = max(1, time_left)
             raw = self.event.get_event(wait, jid)
@@ -1201,7 +1201,7 @@ class LocalClient(object):
                     if self.opts['order_masters']:
                         if syndic_wait < self.opts.get('syndic_wait', 1):
                             syndic_wait += 1
-                            timeout_at = int(time.time()) + 1
+                            timeout_at = time.time() + 1
                             continue
                     break
                 continue
@@ -1211,10 +1211,10 @@ class LocalClient(object):
                 if self.opts['order_masters']:
                     if syndic_wait < self.opts.get('syndic_wait', 1):
                         syndic_wait += 1
-                        timeout_at = int(time.time()) + 1
+                        timeout_at = time.time() + 1
                         continue
                 break
-            if glob.glob(wtag) and int(time.time()) <= timeout_at + 1:
+            if glob.glob(wtag) and time.time() <= timeout_at + 1:
                 # The timeout +1 has not been reached and there is still a
                 # write tag for the syndic
                 continue
@@ -1232,7 +1232,7 @@ class LocalClient(object):
                                     }
                                 })
                 break
-            if int(time.time()) > timeout_at:
+            if time.time() > timeout_at:
                 # The timeout has been reached, check the jid to see if the
                 # timeout needs to be increased
                 jinfo = self.gather_job_info(jid, tgt, tgt_type, minions - found, **kwargs)
@@ -1245,7 +1245,7 @@ class LocalClient(object):
                             )
                         more_time = True
                 if more_time:
-                    timeout_at = int(time.time()) + timeout
+                    timeout_at = time.time() + timeout
                     continue
                 else:
                     last_time = True

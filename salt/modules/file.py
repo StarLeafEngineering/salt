@@ -138,7 +138,7 @@ def gid_to_group(gid):
 
     try:
         return grp.getgrgid(gid).gr_name
-    except KeyError:
+    except (KeyError, NameError) as e:
         return ''
 
 
@@ -204,7 +204,7 @@ def uid_to_user(uid):
     '''
     try:
         return pwd.getpwuid(uid).pw_name
-    except KeyError:
+    except (KeyError, NameError) as e:
         return ''
 
 
@@ -2193,7 +2193,7 @@ def check_perms(name, ret, user, group, mode):
         raise CommandExecutionError('{0} does not exist'.format(name))
     perms['luser'] = cur['user']
     perms['lgroup'] = cur['group']
-    perms['lmode'] = cur['mode']
+    perms['lmode'] = __salt__['config.manage_mode'](cur['mode'])
 
     # Mode changes if needed
     if mode is not None:
@@ -2282,7 +2282,9 @@ def check_managed(
         salt '*' file.check_managed /etc/httpd/conf.d/httpd.conf salt://http/httpd.conf '{hash_type: 'md5', 'hsum': <md5sum>}' root, root, '755' jinja True None None base
     '''
     # If the source is a list then find which file exists
-    source, source_hash = source_list(source, source_hash, saltenv)
+    source, source_hash = source_list(source,           # pylint: disable=W0633
+                                      source_hash,
+                                      saltenv)
 
     sfn = ''
     source_sum = None
