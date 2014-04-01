@@ -192,7 +192,7 @@ def present(name,
             and user_attr['inherits privileges'] != inherit
         ):
             update['inherit'] = inherit
-        if (login is not None and user_attr['can login'] != login):
+        if login is not None and user_attr['can login'] != login:
             update['login'] = login
         if (
             createroles is not None
@@ -206,7 +206,7 @@ def present(name,
             update['replication'] = replication
         if superuser is not None and user_attr['superuser'] != superuser:
             update['superuser'] = superuser
-        if (password is not None and user_attr['password'] != password):
+        if password is not None and user_attr['password'] != password:
             update['password'] = True
     if mode == 'create' or (mode == 'update' and update):
         cret = __salt__['postgres.user_{0}'.format(mode)](
@@ -227,6 +227,8 @@ def present(name,
         ret['comment'] = 'The user {0} has been {1}d'.format(name, mode)
         if update:
             ret['changes'][name] = update
+        else:
+            ret['changes'][name] = 'Present'
     elif cret is not None:
         ret['comment'] = 'Failed to create user {0}'.format(name)
         ret['result'] = False
