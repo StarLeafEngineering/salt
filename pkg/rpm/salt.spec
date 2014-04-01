@@ -5,7 +5,7 @@
 %define __python %{_bindir}/python%{?pybasever}
 %endif
 
-%global include_tests 1
+%global include_tests 0
 
 %{!?python_sitelib: %global python_sitelib %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")}
 %{!?python_sitearch: %global python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
@@ -156,6 +156,7 @@ mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/salt/
 install -p -m 0640 conf/minion $RPM_BUILD_ROOT%{_sysconfdir}/salt/minion
 install -p -m 0640 conf/master $RPM_BUILD_ROOT%{_sysconfdir}/salt/master
 
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/default
 cat <<@EOF > $RPM_BUILD_ROOT%{_sysconfdir}/default/salt
 # /etc/default/salt
 # This file can theoretically contain a bunch of customization variables
