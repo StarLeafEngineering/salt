@@ -48,7 +48,6 @@ def __virtual__():
     try:
         os_grain = __grains__['os'].lower()
         os_family = __grains__['os_family'].lower()
-        os_major_version = int(__grains__['osrelease'].split('.')[0])
     except Exception:
         return False
 
@@ -104,7 +103,6 @@ def _repoquery(repoquery_args, query_format=__QUERYFORMAT):
     '''
     Runs a repoquery command and returns a list of namedtuples
     '''
-    ret = []
     cmd = 'repoquery --queryformat="{0}" {1}'.format(
         query_format, repoquery_args
     )
@@ -143,6 +141,28 @@ def _get_repo_options(**kwargs):
     return repo_arg
 
 
+def normalize_name(name):
+    '''
+    Strips the architecture from the specified package name, if necessary (in
+    other words, if the arch matches the OS arch, or is ``noarch``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' pkg.normalize_name zsh.x86_64
+    '''
+    try:
+        arch = name.rsplit('.', 1)[-1]
+        if arch not in __ARCHES + ('noarch',):
+            return name
+    except ValueError:
+        return name
+    if arch in (__grains__['osarch'], 'noarch'):
+        return name[:-(len(arch) + 1)]
+    return name
+
+
 def latest_version(*names, **kwargs):
     '''
     Return the latest version of the named package available for upgrade or
@@ -163,9 +183,6 @@ def latest_version(*names, **kwargs):
         salt '*' pkg.latest_version <package1> <package2> <package3> ...
     '''
     refresh = salt.utils.is_true(kwargs.pop('refresh', True))
-    # FIXME: do stricter argument checking that somehow takes
-    # _get_repo_options() into account
-
     if len(names) == 0:
         return ''
 
@@ -203,7 +220,8 @@ def latest_version(*names, **kwargs):
     # Get updates for specified package(s)
     repo_arg = _get_repo_options(**kwargs)
     updates = _repoquery_pkginfo(
-        '{0} --pkgnarrow=available {1}'.format(repo_arg, ' '.join(names))
+        '{0} --pkgnarrow=available --plugins {1}'
+        .format(repo_arg, ' '.join(names))
     )
 
     for name in names:
@@ -264,8 +282,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
@@ -333,7 +352,7 @@ def list_repo_pkgs(*args, **kwargs):
 
     ret = {}
     for repo in repos:
-        repoquery_cmd = '--all --repoid="{0}"'.format(repo)
+        repoquery_cmd = '--all --repoid="{0}" --plugins'.format(repo)
         for arg in args:
             repoquery_cmd += ' "{0}"'.format(arg)
         all_pkgs = _repoquery_pkginfo(repoquery_cmd)
@@ -359,7 +378,9 @@ def list_upgrades(refresh=True, **kwargs):
         refresh_db()
 
     repo_arg = _get_repo_options(**kwargs)
-    updates = _repoquery_pkginfo('{0} --all --pkgnarrow=updates'.format(repo_arg))
+    updates = _repoquery_pkginfo(
+        '{0} --all --pkgnarrow=updates --plugins'.format(repo_arg)
+    )
     return dict([(x.name, x.version) for x in updates])
 
 
@@ -386,15 +407,17 @@ def check_db(*names, **kwargs):
         salt '*' pkg.check_db <package1> <package2> <package3> fromrepo=epel-testing
     '''
     repo_arg = _get_repo_options(**kwargs)
-    repoquery_base = '{0} --all --quiet --whatprovides'.format(repo_arg)
+    repoquery_base = \
+        '{0} --all --quiet --whatprovides --plugins'.format(repo_arg)
 
-    if 'avail' in __context__:
-        avail = __context__['avail']
+    if 'pkg._avail' in __context__:
+        avail = __context__['pkg._avail']
     else:
         # get list of available packages
         avail = []
         lines = _repoquery(
-            '--pkgnarrow=all --all', query_format='%{NAME}_|-%{ARCH}'
+            '{0} --pkgnarrow=all --all --plugins'.format(repo_arg),
+            query_format='%{NAME}_|-%{ARCH}'
         )
         for line in lines:
             try:
@@ -405,19 +428,15 @@ def check_db(*names, **kwargs):
                 avail.append('.'.join((name, arch)))
             else:
                 avail.append(name)
-        __context__['avail'] = avail
+        __context__['pkg._avail'] = avail
 
     ret = {}
     for name in names:
         ret.setdefault(name, {})['found'] = name in avail
         if not ret[name]['found']:
-            repoquery_cmd = repoquery_base + ' {0!r}'.format(name)
+            repoquery_cmd = repoquery_base + ' {0}'.format(name)
             provides = set(x.name for x in _repoquery_pkginfo(repoquery_cmd))
-            if provides:
-                for pkg in provides:
-                    ret[name]['suggestions'] = list(provides)
-            else:
-                ret[name]['suggestions'] = []
+            ret[name]['suggestions'] = sorted(provides)
     return ret
 
 
@@ -444,7 +463,9 @@ def refresh_db():
     }
 
     cmd = 'yum -q clean expire-cache && yum -q check-update'
-    ret = __salt__['cmd.retcode'](cmd)
+    ret = __salt__['cmd.retcode'](cmd,
+                                  output_loglevel='debug',
+                                  ignore_retcode=True)
     return retcodes.get(ret, False)
 
 
@@ -715,7 +736,10 @@ def install(name=None,
 
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    ret = salt.utils.compare_dicts(old, new)
+    if ret:
+        __context__.pop('pkg._avail', None)
+    return ret
 
 
 def upgrade(refresh=True):
@@ -740,10 +764,13 @@ def upgrade(refresh=True):
     __salt__['cmd.run'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    ret = salt.utils.compare_dicts(old, new)
+    if ret:
+        __context__.pop('pkg._avail', None)
+    return ret
 
 
-def remove(name=None, pkgs=None, **kwargs):
+def remove(name=None, pkgs=None, **kwargs):  # pylint: disable=W0613
     '''
     Remove packages with ``yum -q -y remove``.
 
@@ -783,10 +810,13 @@ def remove(name=None, pkgs=None, **kwargs):
     __salt__['cmd.run'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return salt.utils.compare_dicts(old, new)
+    ret = salt.utils.compare_dicts(old, new)
+    if ret:
+        __context__.pop('pkg._avail', None)
+    return ret
 
 
-def purge(name=None, pkgs=None, **kwargs):
+def purge(name=None, pkgs=None, **kwargs):  # pylint: disable=W0613
     '''
     Package purges are not supported by yum, this function is identical to
     :mod:`pkg.remove <salt.modules.yumpkg.remove>`.
@@ -974,7 +1004,7 @@ def list_repos(basedir='/etc/yum.repos.d'):
         repopath = '{0}/{1}'.format(basedir, repofile)
         if not repofile.endswith('.repo'):
             continue
-        header, filerepos = _parse_repo_file(repopath)
+        filerepos = _parse_repo_file(repopath)[1]
         for reponame in filerepos.keys():
             repo = filerepos[reponame]
             repo['file'] = repopath
@@ -982,7 +1012,7 @@ def list_repos(basedir='/etc/yum.repos.d'):
     return repos
 
 
-def get_repo(repo, basedir='/etc/yum.repos.d', **kwargs):
+def get_repo(repo, basedir='/etc/yum.repos.d', **kwargs):  # pylint: disable=W0613
     '''
     Display a repo from <basedir> (default basedir: /etc/yum.repos.d).
 
@@ -1004,11 +1034,11 @@ def get_repo(repo, basedir='/etc/yum.repos.d', **kwargs):
         raise Exception('repo {0} was not found in {1}'.format(repo, basedir))
 
     # Return just one repo
-    header, filerepos = _parse_repo_file(repofile)
+    filerepos = _parse_repo_file(repofile)[1]
     return filerepos[repo]
 
 
-def del_repo(repo, basedir='/etc/yum.repos.d', **kwargs):
+def del_repo(repo, basedir='/etc/yum.repos.d', **kwargs):  # pylint: disable=W0613
     '''
     Delete a repo from <basedir> (default basedir: /etc/yum.repos.d).
 

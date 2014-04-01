@@ -28,10 +28,56 @@ import salt.utils as utils
 import salt.version as version
 import salt.syspaths as syspaths
 import salt.log.setup as log
+from salt.utils import yamlloader
 from salt.utils.validate.path import is_writeable
+from salt._compat import string_types
 
 if not utils.is_windows():
     import salt.cloud.exceptions
+
+# Import 3rd-party libs
+import yaml
+from yaml.scanner import ScannerError as YAMLScannerError
+
+
+def parse_args_kwargs(args):
+    '''
+    Parse out the args and kwargs from an args string
+    '''
+    _args = []
+    _kwargs = {}
+    for arg in args:
+        if isinstance(arg, string_types):
+            arg_name, arg_value = utils.parse_kwarg(arg)
+            if arg_name:
+                if arg_value.strip() == '':
+                    # Because YAML loads empty strings as None, we return the original string
+                    # >>> import yaml
+                    # >>> yaml.load('') is None
+                    # True
+                    # >>> yaml.load('      ') is None
+                    # True
+                    _kwargs[arg_name] = arg_value
+                    continue
+                try:
+                    _kwargs[arg_name] = yaml.load(arg_value, Loader=yamlloader.CustomLoader)
+                except YAMLScannerError:
+                    _kwargs[arg_name] = arg_value
+            else:
+                if arg.strip() == '':
+                    # Because YAML loads empty strings as None, we return the original string
+                    # >>> import yaml
+                    # >>> yaml.load('') is None
+                    # True
+                    # >>> yaml.load('      ') is None
+                    # True
+                    _args.append(arg)
+                    continue
+                try:
+                    _args.append(yaml.load(arg, Loader=yamlloader.CustomLoader))
+                except YAMLScannerError:
+                    _args.append(arg)
+    return _args, _kwargs
 
 
 def _sorted(mixins_or_funcs):
@@ -300,7 +346,12 @@ class ConfigDirMixIn(object):
         self.options.config_dir = os.path.abspath(self.options.config_dir)
 
         if hasattr(self, 'setup_config'):
-            self.config = self.setup_config()
+            try:
+                self.config = self.setup_config()
+            except (IOError, OSError) as exc:
+                self.error(
+                    'Failed to load configuration: {0}'.format(exc)
+                )
 
     def get_config_file_path(self, configfile=None):
         if configfile is None:
@@ -1560,6 +1611,9 @@ class SaltCMDOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
                 else:
                     self.config['fun'] = self.args[1]
                     self.config['arg'] = self.args[2:]
+
+                # parse the args and kwargs before sending to the publish interface
+                self.config['arg'] = salt.client.condition_kwarg(*parse_args_kwargs(self.config['arg']))
             except IndexError:
                 self.exit(42, '\nIncomplete options passed.\n\n')
 

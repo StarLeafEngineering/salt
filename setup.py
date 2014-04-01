@@ -22,6 +22,12 @@ from distutils.command.clean import clean
 from distutils.command.sdist import sdist
 # pylint: enable=E0611
 
+try:
+    import zmq
+    HAS_ZMQ = True
+except ImportError:
+    HAS_ZMQ = False
+
 # Change to salt source's directory prior to running any command
 try:
     SETUP_DIRNAME = os.path.dirname(__file__)
@@ -433,6 +439,7 @@ SETUP_KWARGS = {'name': NAME,
                              'salt.states',
                              'salt.fileserver',
                              'salt.search',
+                             'salt.templates',
                              'salt.transport',
                              'salt.output',
                              'salt.utils',
@@ -505,6 +512,14 @@ FREEZER_INCLUDES = [
     'email',
     'email.mime.*',
 ]
+
+if hasattr(zmq, 'pyzmq_version_info'):
+    if HAS_ZMQ and zmq.pyzmq_version_info() >= (0, 14):
+        # We're freezing, and when freezing ZMQ needs to be installed, so this
+        # works fine
+        if 'zmq.core.*' in FREEZER_INCLUDES:
+            # For PyZMQ >= 0.14, freezing does not need 'zmq.core.*'
+            FREEZER_INCLUDES.remove('zmq.core.*')
 
 if IS_WINDOWS_PLATFORM:
     FREEZER_INCLUDES.extend([

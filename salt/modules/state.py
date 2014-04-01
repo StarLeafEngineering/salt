@@ -19,6 +19,7 @@ import salt.utils
 import salt.state
 import salt.payload
 from salt._compat import string_types
+from salt.exceptions import SaltInvocationError
 
 
 __proxyenabled__ = ['*']
@@ -259,6 +260,10 @@ def highstate(test=None, queue=False, **kwargs):
         opts['environment'] = kwargs['saltenv']
 
     pillar = kwargs.get('pillar')
+    if pillar is not None and not isinstance(pillar, dict):
+        raise SaltInvocationError(
+            'Pillar data must be formatted as a dictionary'
+        )
 
     st_ = salt.state.HighState(opts, pillar, kwargs.get('__pub_jid'))
     st_.push_active()
@@ -349,6 +354,10 @@ def sls(mods,
         opts['test'] = __opts__.get('test', None)
 
     pillar = kwargs.get('pillar')
+    if pillar is not None and not isinstance(pillar, dict):
+        raise SaltInvocationError(
+            'Pillar data must be formatted as a dictionary'
+        )
 
     serial = salt.payload.Serial(__opts__)
     cfn = os.path.join(
@@ -412,7 +421,7 @@ def sls(mods,
                 pass
     except (IOError, OSError):
         msg = 'Unable to write to highstate cache file {0}. Do you have permissions?'
-        log.error(msg.format(fp_))
+        log.error(msg.format(cfn))
     return ret
 
 
@@ -446,7 +455,14 @@ def top(topfn, test=None, queue=False, **kwargs):
         opts['test'] = True
     else:
         opts['test'] = __opts__.get('test', None)
-    st_ = salt.state.HighState(opts)
+
+    pillar = kwargs.get('pillar')
+    if pillar is not None and not isinstance(pillar, dict):
+        raise SaltInvocationError(
+            'Pillar data must be formatted as a dictionary'
+        )
+
+    st_ = salt.state.HighState(opts, pillar)
     st_.push_active()
     st_.opts['state_top'] = os.path.join('salt://', topfn)
     try:
@@ -696,12 +712,20 @@ def single(fun, name, test=None, queue=False, **kwargs):
         opts['test'] = True
     else:
         opts['test'] = __opts__.get('test', None)
-    st_ = salt.state.State(opts)
+
+    pillar = kwargs.get('pillar')
+    if pillar is not None and not isinstance(pillar, dict):
+        raise SaltInvocationError(
+            'Pillar data must be formatted as a dictionary'
+        )
+
+    st_ = salt.state.State(opts, pillar)
     err = st_.verify_data(kwargs)
     if err:
         __context__['retcode'] = 1
         return err
 
+    st_._mod_init(kwargs)
     ret = {'{0[state]}_|-{0[__id__]}_|-{0[name]}_|-{0[fun]}'.format(kwargs):
             st_.call(kwargs)}
     _set_retcode(ret)

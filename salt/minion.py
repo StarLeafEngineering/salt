@@ -66,7 +66,7 @@ import salt.payload
 import salt.utils.schedule
 import salt.utils.event
 
-from salt._compat import string_types
+from salt._compat import integer_types, string_types
 from salt.utils.debug import enable_sigusr1_handler
 from salt.utils.event import tagify
 import salt.syspaths
@@ -159,7 +159,6 @@ def parse_args_and_kwargs(func, args, data=None):
     invalid_kwargs = []
 
     for arg in args:
-        # support old yamlify syntax
         if isinstance(arg, string_types):
             arg_name, arg_value = salt.utils.parse_kwarg(arg)
             if arg_name:
@@ -179,7 +178,10 @@ def parse_args_and_kwargs(func, args, data=None):
             for key, val in arg.iteritems():
                 if key == '__kwarg__':
                     continue
-                kwargs[key] = val
+                if isinstance(val, string_types):
+                    kwargs[key] = yamlify_arg(val)
+                else:
+                    kwargs[key] = val
             continue
         _args.append(yamlify_arg(arg))
     if argspec.keywords and isinstance(data, dict):
@@ -202,28 +204,40 @@ def yamlify_arg(arg):
     if not isinstance(arg, string_types):
         return arg
     try:
-        original_arg = str(arg)
-        if isinstance(arg, string_types):
-            if '#' in arg:
-                # Don't yamlify this argument or the '#' and everything after
-                # it will be interpreted as a comment.
-                return arg
-            if '\n' not in arg:
-                arg = yaml.safe_load(arg)
+        # Explicit late import to avoid circular import. DO NOT MOVE THIS.
+        import salt.utils.yamlloader as yamlloader
+        original_arg = arg
+        if '#' in arg:
+            # Don't yamlify this argument or the '#' and everything after
+            # it will be interpreted as a comment.
+            return arg
+        if arg == 'None':
+            arg = None
+        elif '\n' not in arg:
+            arg = yamlloader.load(arg, Loader=yamlloader.CustomLoader)
+
         if isinstance(arg, dict):
             # dicts must be wrapped in curly braces
-            if (isinstance(original_arg, string_types) and
-                    not original_arg.startswith('{')):
+            if not original_arg.startswith('{'):
                 return original_arg
             else:
                 return arg
-        elif isinstance(arg, (int, list, string_types)):
+
+        elif arg is None or isinstance(arg, (list, float, integer_types, string_types)):
             # yaml.safe_load will load '|' as '', don't let it do that.
             if arg == '' and original_arg in ('|',):
                 return original_arg
             # yaml.safe_load will treat '#' as a comment, so a value of '#'
             # will become None. Keep this value from being stomped as well.
             elif arg is None and original_arg.strip().startswith('#'):
+                return original_arg
+            elif arg is None and original_arg.strip() == '':
+                # Because YAML loads empty strings as None, we return the original string
+                # >>> import yaml
+                # >>> yaml.load('') is None
+                # True
+                # >>> yaml.load('      ') is None
+                # True
                 return original_arg
             else:
                 return arg
@@ -736,9 +750,12 @@ class Minion(object):
             )
         else:
             process = threading.Thread(
-                target=target, args=(instance, self.opts, data)
+                target=target, args=(instance, self.opts, data),
+                name=data['jid']
             )
         process.start()
+        if not sys.platform.startswith('win'):
+            process.join()
 
     @classmethod
     def _thread_return(cls, minion_instance, opts, data):
@@ -750,13 +767,13 @@ class Minion(object):
         # multiprocessing communication.
         if not minion_instance:
             minion_instance = cls(opts)
+        fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
         if opts['multiprocessing']:
-            fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
             salt.utils.daemonize_if(opts)
-            sdata = {'pid': os.getpid()}
-            sdata.update(data)
-            with salt.utils.fopen(fn_, 'w+b') as fp_:
-                fp_.write(minion_instance.serial.dumps(sdata))
+        sdata = {'pid': os.getpid()}
+        sdata.update(data)
+        with salt.utils.fopen(fn_, 'w+b') as fp_:
+            fp_.write(minion_instance.serial.dumps(sdata))
         ret = {'success': False}
         function_name = data['fun']
         if function_name in minion_instance.functions:
@@ -793,6 +810,7 @@ class Minion(object):
                 )
                 log.debug(msg, exc_info=True)
                 ret['return'] = '{0}: {1}'.format(msg, exc)
+                ret['out'] = 'nested'
             except CommandExecutionError as exc:
                 log.error(
                     'A command in {0!r} had a problem: {1}'.format(
@@ -802,6 +820,7 @@ class Minion(object):
                     exc_info=log.isEnabledFor(logging.DEBUG)
                 )
                 ret['return'] = 'ERROR: {0}'.format(exc)
+                ret['out'] = 'nested'
             except SaltInvocationError as exc:
                 log.error(
                     'Problem executing {0!r}: {1}'.format(
@@ -813,6 +832,7 @@ class Minion(object):
                 ret['return'] = 'ERROR executing {0!r}: {1}'.format(
                     function_name, exc
                 )
+                ret['out'] = 'nested'
             except TypeError as exc:
                 trb = traceback.format_exc()
                 aspec = salt.utils.get_function_argspec(
@@ -825,12 +845,15 @@ class Minion(object):
                                                        aspec)
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = msg
+                ret['out'] = 'nested'
             except Exception:
                 msg = 'The minion function caused an exception'
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = '{0}: {1}'.format(msg, traceback.format_exc())
+                ret['out'] = 'nested'
         else:
             ret['return'] = '{0!r} is not available.'.format(function_name)
+            ret['out'] = 'nested'
 
         ret['jid'] = data['jid']
         ret['fun'] = data['fun']
@@ -931,13 +954,21 @@ class Minion(object):
                     'id': self.opts['id']}
             for key, value in ret.items():
                 load[key] = value
-        try:
-            oput = self.functions[fun].__outputter__
-        except (KeyError, AttributeError, TypeError):
-            pass
+
+        if 'out' in ret:
+            if isinstance(ret['out'], string_types):
+                load['out'] = ret['out']
+            else:
+                log.error('Invalid outputter {0}. This is likely a bug.'
+                          .format(ret['out']))
         else:
-            if isinstance(oput, string_types):
-                load['out'] = oput
+            try:
+                oput = self.functions[fun].__outputter__
+            except (KeyError, AttributeError, TypeError):
+                pass
+            else:
+                if isinstance(oput, string_types):
+                    load['out'] = oput
         try:
             ret_val = sreq.send('aes', self.crypticle.dumps(load))
         except SaltReqTimeoutError:
@@ -1067,11 +1098,10 @@ class Minion(object):
         self._running = False
         exit(0)
 
-    # Main Minion Tune In
-    def tune_in(self):
+    def _pre_tune(self):
         '''
-        Lock onto the publisher. This is the main event loop for the minion
-        :rtype : None
+        Set the minion running flag and issue the appropriate warnings if
+        the minion cannot be started or is already running
         '''
         if self._running is None:
             self._running = True
@@ -1105,6 +1135,15 @@ class Minion(object):
                 ),
                 exc_info=err
             )
+
+    # Main Minion Tune In
+    def tune_in(self):
+        '''
+        Lock onto the publisher. This is the main event loop for the minion
+        :rtype : None
+        '''
+
+        self._pre_tune()
 
         # Properly exit if a SIGTERM is signalled
         signal.signal(signal.SIGTERM, self.clean_die)
@@ -1359,6 +1398,7 @@ class Minion(object):
         management of the event bus assuming that these are handled outside
         the tune_in sequence
         '''
+        self._pre_tune()
         self.context = zmq.Context()
         self.poller = zmq.Poller()
         self.socket = self.context.socket(zmq.SUB)
