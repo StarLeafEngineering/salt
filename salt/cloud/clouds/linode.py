@@ -58,13 +58,8 @@ def __virtual__():
     Set up the libcloud functions and check for Linode configurations.
     '''
     if get_configured_provider() is False:
-        log.debug(
-            'There is no Linode cloud provider configuration available. Not '
-            'loading module.'
-        )
         return False
 
-    log.debug('Loading Linode cloud module')
     return True
 
 
@@ -269,7 +264,7 @@ def create(vm_):
                 )
             )
 
-    ret.update(data)
+    ret.update(data.__dict__)
 
     log.info('Created Cloud VM {0[name]!r}'.format(vm_))
     log.debug(

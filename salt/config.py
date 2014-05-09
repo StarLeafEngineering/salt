@@ -27,6 +27,7 @@ import salt.utils
 import salt.utils.network
 import salt.pillar
 import salt.syspaths
+import salt.utils.validate.path
 
 import sys
 #can't use salt.utils.is_windows, because config.py is included from salt.utils
@@ -102,6 +103,7 @@ VALID_OPTS = {
     'state_events': bool,
     'acceptance_wait_time': float,
     'acceptance_wait_time_max': float,
+    'rejected_retry': bool,
     'loop_interval': float,
     'dns_check': bool,
     'verify_env': bool,
@@ -187,6 +189,11 @@ VALID_OPTS = {
     'syndic_max_event_process_time': float,
     'auth_timeout': int,
     'enumerate_proxy_minions': bool,
+    'ssh_passwd': str,
+    'ssh_port': str,
+    'ssh_sudo': bool,
+    'ssh_timeout': float,
+    'ssh_user': str,
 }
 
 # default configurations
@@ -258,6 +265,7 @@ DEFAULT_MINION_OPTS = {
     'state_events': False,
     'acceptance_wait_time': 10,
     'acceptance_wait_time_max': 0,
+    'rejected_retry': False,
     'loop_interval': 1,
     'dns_check': True,
     'verify_env': True,
@@ -269,7 +277,7 @@ DEFAULT_MINION_OPTS = {
     'retry_dns': 30,
     'recon_max': 5000,
     'recon_default': 100,
-    'recon_randomize': False,
+    'recon_randomize': True,
     'win_repo_cachefile': 'salt://win/repo/winrepo.p',
     'pidfile': os.path.join(salt.syspaths.PIDFILE_DIR, 'salt-minion.pid'),
     'range_server': 'range:80',
@@ -282,7 +290,7 @@ DEFAULT_MINION_OPTS = {
     'minion_id_caching': True,
     'keysize': 4096,
     'salt_transport': 'zeromq',
-    'auth_timeout': 3,
+    'auth_timeout': 60,
 }
 
 DEFAULT_MASTER_OPTS = {
@@ -378,7 +386,7 @@ DEFAULT_MASTER_OPTS = {
     'nodegroups': {},
     'cython_enable': False,
     'enable_gpu_grains': False,
-    # XXX: Remove 'key_logfile' support in 0.18.0
+    # XXX: Remove 'key_logfile' support in 2014.1.0
     'key_logfile': os.path.join(salt.syspaths.LOGS_DIR, 'key'),
     'verify_env': True,
     'permissive_pki_access': False,
@@ -397,6 +405,11 @@ DEFAULT_MASTER_OPTS = {
     'syndic_event_forward_timeout': 0.5,
     'syndic_max_event_process_time': 0.5,
     'enumerate_proxy_minions': False,
+    'ssh_passwd': '',
+    'ssh_port': '22',
+    'ssh_sudo': False,
+    'ssh_timeout': 60,
+    'ssh_user': 'root',
 }
 
 # ----- Salt Cloud Configuration Defaults ----------------------------------->
@@ -577,7 +590,7 @@ def load_config(path, env_var, default_path=None):
                     ifile.readline()  # skip first line
                     out.write(ifile.read())
 
-    if os.path.isfile(path):
+    if salt.utils.validate.path.is_readable(path):
         opts = _read_conf_file(path)
         opts['conf_file'] = path
         return opts
@@ -655,7 +668,7 @@ def minion_config(path,
         # argument was then removed in `9d893e4` and `**kwargs` was then added
         # in `5d60f77` in order not to break backwards compatibility.
         #
-        # Showing a deprecation for 0.17.0 and 0.18.0 should be enough for any
+        # Showing a deprecation for 0.17.0 and 2014.1.0 should be enough for any
         # api calls to be updated in order to stop it's use.
         salt.utils.warn_until(
             'Helium',
@@ -1767,7 +1780,7 @@ def apply_minion_config(overrides=None,
         # argument was then removed in `9d893e4` and `**kwargs` was then added
         # in `5d60f77` in order not to break backwards compatibility.
         #
-        # Showing a deprecation for 0.17.0 and 0.18.0 should be enough for any
+        # Showing a deprecation for 0.17.0 and 2014.1.0 should be enough for any
         # api calls to be updated in order to stop it's use.
         salt.utils.warn_until(
             'Helium',

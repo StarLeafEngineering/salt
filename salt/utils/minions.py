@@ -380,7 +380,7 @@ class CkMinions(object):
             log.debug('Evaluating final compound matching expr: {0}'
                       .format(results))
             try:
-                return list(eval(results))
+                return list(eval(results))  # pylint: disable=W0123
             except Exception:
                 log.error('Invalid compound target: {0}'.format(expr))
                 return []
@@ -394,7 +394,7 @@ class CkMinions(object):
         if self.opts.get('minion_data_cache', False):
             cdir = os.path.join(self.opts['cachedir'], 'minions')
             if not os.path.isdir(cdir):
-                return list(minions)
+                return minions
             addrs = salt.utils.network.local_port_tcp(int(self.opts['publish_port']))
             if '127.0.0.1' in addrs:
                 addrs.update(self.ip_addrs)

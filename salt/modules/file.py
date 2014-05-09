@@ -17,7 +17,6 @@ import difflib
 import errno
 import fileinput
 import fnmatch
-import getpass
 import hashlib
 import itertools
 import logging
@@ -45,6 +44,10 @@ from salt.exceptions import CommandExecutionError, SaltInvocationError
 import salt._compat
 
 log = logging.getLogger(__name__)
+
+__func_alias__ = {
+    'makedirs_': 'makedirs'
+}
 
 HASHES = [
             ['sha512', 128],
@@ -81,6 +84,9 @@ def __clean_tmp(sfn):
 
 
 def _error(ret, err_msg):
+    '''
+    Common function for setting error information for return dicts
+    '''
     ret['result'] = False
     ret['comment'] = err_msg
     return ret
@@ -138,7 +144,7 @@ def gid_to_group(gid):
 
     try:
         return grp.getgrgid(gid).gr_name
-    except (KeyError, NameError) as e:
+    except (KeyError, NameError):
         return ''
 
 
@@ -204,7 +210,7 @@ def uid_to_user(uid):
     '''
     try:
         return pwd.getpwuid(uid).pw_name
-    except (KeyError, NameError) as e:
+    except (KeyError, NameError):
         return ''
 
 
@@ -219,7 +225,7 @@ def user_to_uid(user):
         salt '*' file.user_to_uid root
     '''
     if not user:
-        user = getpass.getuser()
+        user = salt.utils.get_user()
     try:
         return pwd.getpwnam(user).pw_uid
     except KeyError:
@@ -294,6 +300,34 @@ def set_mode(path, mode):
     except Exception:
         return 'Invalid Mode ' + mode
     return get_mode(path)
+
+
+def lchown(path, user, group):
+    '''
+    Chown a file, pass the file the desired user and group without following
+    symlinks.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' file.chown /etc/passwd root root
+    '''
+    uid = user_to_uid(user)
+    gid = group_to_gid(group)
+    err = ''
+    if uid == '':
+        if user:
+            err += 'User does not exist\n'
+        else:
+            uid = -1
+    if gid == '':
+        if group:
+            err += 'Group does not exist\n'
+        else:
+            gid = -1
+
+    return os.lchown(path, uid, gid)
 
 
 def chown(path, user, group):
@@ -390,7 +424,7 @@ def get_hash(path, form='md5', chunk_size=4096):
     return salt.utils.get_hash(path, form, chunk_size)
 
 
-def check_hash(path, hash):
+def check_hash(path, file_hash):
     '''
     Check if a file matches the given hash string
 
@@ -409,9 +443,12 @@ def check_hash(path, hash):
 
         salt '*' file.check_hash /etc/fstab md5=<md5sum>
     '''
-    hash_parts = hash.split('=', 1)
+    hash_parts = file_hash.split(':', 1)
     if len(hash_parts) != 2:
-        raise ValueError('Bad hash format: {0!r}'.format(hash))
+        # Support "=" for backward compatibility.
+        hash_parts = file_hash.split('=', 1)
+        if len(hash_parts) != 2:
+            raise ValueError('Bad hash format: {0!r}'.format(file_hash))
     hash_form, hash_value = hash_parts
     return get_hash(path, hash_form) == hash_value
 
@@ -964,17 +1001,19 @@ def replace(path,
 
     # Avoid TypeErrors by forcing repl to be a string
     repl = str(repl)
-    for line in fileinput.input(path,
-                                inplace=not dry_run,
-                                backup=False if dry_run else backup,
-                                bufsize=bufsize,
-                                mode='rb'):
+    fi_file = fileinput.input(path,
+                              inplace=not dry_run,
+                              backup=False if dry_run else backup,
+                              bufsize=bufsize,
+                              mode='rb')
+    for line in fi_file:
 
         if search_only:
             # Just search; bail as early as a match is found
             result = re.search(cpattern, line)
 
             if result:
+                fi_file.close()  # close file handle before returning
                 return True
         else:
             result = re.sub(cpattern, repl, line, count)
@@ -1143,7 +1182,7 @@ def blockreplace(path,
         elif append_if_not_found:
             # Make sure we have a newline at the end of the file
             if 0 != len(new_file):
-                if not new_file[-1].ends_with('\n'):
+                if not new_file[-1].endswith('\n'):
                     new_file[-1] += '\n'
             # add the markers and content at the end of file
             new_file.append(marker_start + '\n')
@@ -1344,12 +1383,12 @@ def contains_regex_multiline(path, regex):
         return False
 
 
-def contains_glob(path, glob):
+def contains_glob(path, glob_expr):
     '''
     .. deprecated:: 0.17.0
        Use :func:`search` instead.
 
-    Return True if the given glob matches a string in the named file
+    Return ``True`` if the given glob matches a string in the named file
 
     CLI Example:
 
@@ -1363,7 +1402,7 @@ def contains_glob(path, glob):
     try:
         with salt.utils.filebuffer.BufferedReader(path) as breader:
             for chunk in breader:
-                if fnmatch.fnmatch(chunk, glob):
+                if fnmatch.fnmatch(chunk, glob_expr):
                     return True
             return False
     except (IOError, OSError):
@@ -1509,7 +1548,7 @@ def truncate(path, length):
     seek_fh.close()
 
 
-def link(src, link):
+def link(src, path):
     '''
     Create a hard link to a file
 
@@ -1525,14 +1564,14 @@ def link(src, link):
         raise SaltInvocationError('File path must be absolute.')
 
     try:
-        os.link(src, link)
+        os.link(src, path)
         return True
     except (OSError, IOError):
-        raise CommandExecutionError('Could not create {0!r}'.format(link))
+        raise CommandExecutionError('Could not create {0!r}'.format(path))
     return False
 
 
-def symlink(src, link):
+def symlink(src, path):
     '''
     Create a symbolic link to a file
 
@@ -1546,10 +1585,10 @@ def symlink(src, link):
         raise SaltInvocationError('File path must be absolute.')
 
     try:
-        os.symlink(src, link)
+        os.symlink(src, path)
         return True
     except (OSError, IOError):
-        raise CommandExecutionError('Could not create {0!r}'.format(link))
+        raise CommandExecutionError('Could not create {0!r}'.format(path))
     return False
 
 
@@ -1902,8 +1941,8 @@ def get_selinux_context(path):
 def set_selinux_context(path,
                         user=None,
                         role=None,
-                        type=None,
-                        range=None):
+                        type=None,    # pylint: disable=W0622
+                        range=None):  # pylint: disable=W0622
     '''
     Set a specific SELinux label on a given path
 
@@ -1962,7 +2001,7 @@ def source_list(source, source_hash, saltenv):
                 )
                 env_splitter = '?env='
             try:
-                sname, senv = single.split(env_splitter)
+                _, senv = single.split(env_splitter)
             except ValueError:
                 continue
             else:
@@ -2170,7 +2209,7 @@ def extract_hash(hash_fn, hash_type='md5', file_name=''):
     return source_sum
 
 
-def check_perms(name, ret, user, group, mode):
+def check_perms(name, ret, user, group, mode, follow_symlinks=False):
     '''
     Check the permissions on files and chown if needed
 
@@ -2179,6 +2218,9 @@ def check_perms(name, ret, user, group, mode):
     .. code-block:: bash
 
         salt '*' file.check_perms /etc/sudoers '{}' root root 400
+
+    .. versionchanged:: 2014.1.3
+        ``follow_symlinks`` option added
     '''
     if not ret:
         ret = {'name': name,
@@ -2192,7 +2234,7 @@ def check_perms(name, ret, user, group, mode):
 
     # Check permissions
     perms = {}
-    cur = stats(name, follow_symlinks=False)
+    cur = stats(name, follow_symlinks=follow_symlinks)
     if not cur:
         raise CommandExecutionError('{0} does not exist'.format(name))
     perms['luser'] = cur['user']
@@ -2223,17 +2265,23 @@ def check_perms(name, ret, user, group, mode):
             perms['cgroup'] = group
     if 'cuser' in perms or 'cgroup' in perms:
         if not __opts__['test']:
+            if os.path.islink(name) and not follow_symlinks:
+                chown_func = lchown
+            else:
+                chown_func = chown
             if user is None:
                 user = perms['luser']
             if group is None:
                 group = perms['lgroup']
             try:
-                chown(name, user, group)
+                chown_func(name, user, group)
             except OSError:
                 ret['result'] = False
 
     if user:
-        if user != get_user(name):
+        if isinstance(user, int):
+            user = uid_to_user(user)
+        if user != get_user(name, follow_symlinks=follow_symlinks):
             if __opts__['test'] is True:
                 ret['changes']['user'] = user
             else:
@@ -2243,7 +2291,9 @@ def check_perms(name, ret, user, group, mode):
         elif 'cuser' in perms:
             ret['changes']['user'] = user
     if group:
-        if group != get_group(name):
+        if isinstance(group, int):
+            group = gid_to_group(group)
+        if group != get_group(name, follow_symlinks=follow_symlinks):
             if __opts__['test'] is True:
                 ret['changes']['group'] = group
             else:
@@ -2270,7 +2320,6 @@ def check_managed(
         group,
         mode,
         template,
-        makedirs,
         context,
         defaults,
         saltenv,
@@ -2466,7 +2515,8 @@ def manage_file(name,
                 mode,
                 saltenv,
                 backup,
-                template=None,
+                makedirs=False,
+                template=None,   # pylint: disable=W0613
                 show_diff=True,
                 contents=None,
                 dir_mode=None):
@@ -2581,7 +2631,7 @@ def manage_file(name,
                         ret, 'Failed to commit change, permission error')
             __clean_tmp(tmp)
 
-        ret, perms = check_perms(name, ret, user, group, mode)
+        ret, _ = check_perms(name, ret, user, group, mode)
 
         if ret['changes']:
             ret['comment'] = 'File {0} updated'.format(name)
@@ -2613,29 +2663,47 @@ def manage_file(name,
                                                dl_sum)
                     ret['result'] = False
                     return ret
-
             if not os.path.isdir(os.path.dirname(name)):
                 if makedirs:
+                    # check for existence of windows drive letter
+                    if salt.utils.is_windows():
+                        drive, _ = os.path.splitdrive(name)
+                        if drive and not os.path.exists(drive):
+                            __clean_tmp(sfn)
+                            return _error(ret,
+                                          '{0} drive not present'.format(drive))
                     if dir_mode is None and mode is not None:
                         # Add execute bit to each nonzero digit in the mode, if
                         # dir_mode was not specified. Otherwise, any
-                        # directories created with makedirs() below can't be
+                        # directories created with makedirs_() below can't be
                         # listed via a shell.
                         mode_list = [x for x in str(mode)][-3:]
                         for idx in xrange(len(mode_list)):
                             if mode_list[idx] != '0':
                                 mode_list[idx] = str(int(mode_list[idx]) | 1)
                         dir_mode = ''.join(mode_list)
-                    makedirs(name, user=user, group=group, mode=dir_mode)
+                    makedirs_(name, user=user, group=group, mode=dir_mode)
                 else:
                     __clean_tmp(sfn)
+                    # No changes actually made
+                    ret['changes'].pop('diff', None)
                     return _error(ret, 'Parent directory not present')
         else:
             if not os.path.isdir(os.path.dirname(name)):
                 if makedirs:
-                    makedirs(name, user=user, group=group, mode=mode)
+                    # check for existence of windows drive letter
+                    if salt.utils.is_windows():
+                        drive, _ = os.path.splitdrive(name)
+                        if drive and not os.path.exists(drive):
+                            __clean_tmp(sfn)
+                            return _error(ret,
+                                          '{0} drive not present'.format(drive))
+                    makedirs_(name, user=user, group=group,
+                              mode=dir_mode or mode)
                 else:
                     __clean_tmp(sfn)
+                    # No changes actually made
+                    ret['changes'].pop('diff', None)
                     return _error(ret, 'Parent directory not present')
 
             # Create the file, user rw-only if mode will be set to prevent
@@ -2692,7 +2760,7 @@ def manage_file(name,
             os.umask(mask)
             # Calculate the mode value that results from the umask
             mode = oct((0777 ^ mask) & 0666)
-        ret, perms = check_perms(name, ret, user, group, mode)
+        ret, _ = check_perms(name, ret, user, group, mode)
 
         if not ret['comment']:
             ret['comment'] = 'File ' + name + ' updated'
@@ -2727,10 +2795,10 @@ def mkdir(dir_path,
         makedirs_perms(directory, user, group, mode)
 
 
-def makedirs(path,
-             user=None,
-             group=None,
-             mode=None):
+def makedirs_(path,
+              user=None,
+              group=None,
+              mode=None):
     '''
     Ensure that the directory containing this path is available.
 
@@ -3047,9 +3115,7 @@ def mknod(name,
       salt '*' file.nknod /dev/fifo p
     '''
     ret = False
-    makedirs(name,
-             user,
-             group)
+    makedirs_(name, user, group)
     if ntype == 'c':
         ret = mknod_chrdev(name,
                            major,

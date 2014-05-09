@@ -648,10 +648,12 @@ class AdaptedConfigurationTestCaseMixIn(object):
             # Running as root, the running user does not need to be updated
             return integration_config_dir
 
-        for fname in os.listdir(integration_config_dir):
-            if fname.startswith(('.', '_')):
-                continue
-            self.get_config_file_path(fname)
+        for triplet in os.walk(integration_config_dir):
+            partial = triplet[0].replace(integration_config_dir, "")[1:]
+            for fname in triplet[2]:
+                if fname.startswith(('.', '_')):
+                    continue
+                self.get_config_file_path(os.path.join(partial, fname))
         return TMP_CONF_DIR
 
     def get_config_file_path(self, filename):
@@ -662,10 +664,11 @@ class AdaptedConfigurationTestCaseMixIn(object):
             # Running as root, the running user does not need to be updated
             return integration_config_file
 
-        if not os.path.isdir(TMP_CONF_DIR):
-            os.makedirs(TMP_CONF_DIR)
-
         updated_config_path = os.path.join(TMP_CONF_DIR, filename)
+        partial = os.path.dirname(updated_config_path)
+        if not os.path.isdir(partial):
+            os.makedirs(partial)
+
         if not os.path.isfile(updated_config_path):
             self.__update_config(integration_config_file, updated_config_path)
         return updated_config_path
@@ -837,28 +840,28 @@ class ShellCase(AdaptedConfigurationTestCaseMixIn, ShellTestCase):
     _script_dir_ = SCRIPT_DIR
     _python_executable_ = PYEXEC
 
-    def run_salt(self, arg_str, with_retcode=False):
+    def run_salt(self, arg_str, with_retcode=False, catch_stderr=False):
         '''
         Execute salt
         '''
         arg_str = '-c {0} {1}'.format(self.get_config_dir(), arg_str)
-        return self.run_script('salt', arg_str, with_retcode=with_retcode)
+        return self.run_script('salt', arg_str, with_retcode=with_retcode, catch_stderr=catch_stderr)
 
-    def run_run(self, arg_str, with_retcode=False):
+    def run_run(self, arg_str, with_retcode=False, catch_stderr=False):
         '''
         Execute salt-run
         '''
         arg_str = '-c {0} {1}'.format(self.get_config_dir(), arg_str)
-        return self.run_script('salt-run', arg_str, with_retcode=with_retcode)
+        return self.run_script('salt-run', arg_str, with_retcode=with_retcode, catch_stderr=catch_stderr)
 
-    def run_run_plus(self, fun, options='', *arg):
+    def run_run_plus(self, fun, options='', *arg, **kwargs):
         '''
         Execute Salt run and the salt run function and return the data from
         each in a dict
         '''
         ret = {}
         ret['out'] = self.run_run(
-            '{0} {1} {2}'.format(options, fun, ' '.join(arg))
+            '{0} {1} {2}'.format(options, fun, ' '.join(arg)), catch_stderr=kwargs.get('catch_stderr', None)
         )
         opts = salt.config.master_config(
             self.get_config_file_path('master')
@@ -881,16 +884,16 @@ class ShellCase(AdaptedConfigurationTestCaseMixIn, ShellTestCase):
             with_retcode=with_retcode
         )
 
-    def run_cp(self, arg_str, with_retcode=False):
+    def run_cp(self, arg_str, with_retcode=False, catch_stderr=False):
         '''
         Execute salt-cp
         '''
         arg_str = '--config-dir {0} {1}'.format(self.get_config_dir(), arg_str)
-        return self.run_script('salt-cp', arg_str, with_retcode=with_retcode)
+        return self.run_script('salt-cp', arg_str, with_retcode=with_retcode, catch_stderr=catch_stderr)
 
-    def run_call(self, arg_str, with_retcode=False):
+    def run_call(self, arg_str, with_retcode=False, catch_stderr=False):
         arg_str = '--config-dir {0} {1}'.format(self.get_config_dir(), arg_str)
-        return self.run_script('salt-call', arg_str, with_retcode=with_retcode)
+        return self.run_script('salt-call', arg_str, with_retcode=with_retcode, catch_stderr=catch_stderr)
 
     def run_cloud(self, arg_str, catch_stderr=False, timeout=None):
         '''

@@ -11,7 +11,6 @@ import re
 import sys
 import stat
 import socket
-import getpass
 import logging
 
 # Import third party libs
@@ -188,12 +187,11 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
     if salt.utils.is_windows():
         return True
     import pwd  # after confirming not running Windows
-    import grp
     try:
         pwnam = pwd.getpwnam(user)
         uid = pwnam[2]
         gid = pwnam[3]
-        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
+        groups = salt.utils.get_gid_list(user, include_default=False)
 
     except KeyError:
         err = ('Failed to prepare the Salt environment for user '
@@ -285,18 +283,16 @@ def check_user(user):
     '''
     if salt.utils.is_windows():
         return True
-    if user == getpass.getuser():
+    if user == salt.utils.get_user():
         return True
     import pwd  # after confirming not running Windows
-    import grp
     try:
         pwuser = pwd.getpwnam(user)
         try:
             if hasattr(os, 'initgroups'):
                 os.initgroups(user, pwuser.pw_gid)
             else:
-                os.setgroups([e.gr_gid for e in grp.getgrall()
-                              if user in e.gr_mem] + [pwuser.pw_gid])
+                os.setgroups(salt.utils.get_gid_list(user, include_default=False))
             os.setgid(pwuser.pw_gid)
             os.setuid(pwuser.pw_uid)
 
@@ -356,7 +352,7 @@ def check_path_traversal(path, user='root'):
             if not os.path.exists(tpath):
                 msg += ' Path does not exist.'
             else:
-                current_user = getpass.getuser()
+                current_user = salt.utils.get_user()
                 # Make the error message more intelligent based on how
                 # the user invokes salt-call or whatever other script.
                 if user != current_user:
