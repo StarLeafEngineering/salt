@@ -145,16 +145,6 @@ mkdir -p $RPM_BUILD_ROOT%{_initrddir}
 install -p -m 0644 pkg/rpm/salt-master $RPM_BUILD_ROOT%{_initrddir}/
 install -p -m 0644 pkg/rpm/salt-syndic $RPM_BUILD_ROOT%{_initrddir}/
 install -p -m 0644 pkg/rpm/salt-minion $RPM_BUILD_ROOT%{_initrddir}/
-%else
-mkdir -p $RPM_BUILD_ROOT%{_unitdir}
-install -p -m 0644 pkg/rpm/salt-master.service $RPM_BUILD_ROOT%{_unitdir}/
-install -p -m 0644 pkg/rpm/salt-syndic.service $RPM_BUILD_ROOT%{_unitdir}/
-install -p -m 0644 pkg/rpm/salt-minion.service $RPM_BUILD_ROOT%{_unitdir}/
-%endif
-
-mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/salt/
-install -p -m 0640 conf/minion $RPM_BUILD_ROOT%{_sysconfdir}/salt/minion
-install -p -m 0640 conf/master $RPM_BUILD_ROOT%{_sysconfdir}/salt/master
 
 cat <<@EOF > $RPM_BUILD_ROOT%{_sysconfdir}/default/salt
 # /etc/default/salt
@@ -178,6 +168,16 @@ MASTER_ARGS=""
 MINION_ARGS=""
 #
 @EOF
+%else
+mkdir -p $RPM_BUILD_ROOT%{_unitdir}
+install -p -m 0644 pkg/rpm/salt-master.service $RPM_BUILD_ROOT%{_unitdir}/
+install -p -m 0644 pkg/rpm/salt-syndic.service $RPM_BUILD_ROOT%{_unitdir}/
+install -p -m 0644 pkg/rpm/salt-minion.service $RPM_BUILD_ROOT%{_unitdir}/
+%endif
+
+mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/salt/
+install -p -m 0640 conf/minion $RPM_BUILD_ROOT%{_sysconfdir}/salt/minion
+install -p -m 0640 conf/master $RPM_BUILD_ROOT%{_sysconfdir}/salt/master
 
 %if ((0%{?rhel} >= 6 || 0%{?fedora} > 12) && 0%{?include_tests})
 %check
@@ -197,7 +197,9 @@ rm -rf $RPM_BUILD_ROOT
 %{python_sitelib}/%{name}/*
 %{python_sitelib}/%{name}-%{version}-py?.?.egg-info
 %doc %{_mandir}/man7/salt.7.*
+%if ! (0%{?rhel} >= 7 || 0%{?fedora} >= 15)
 %config(noreplace) %{_sysconfdir}/default/salt
+%endif
 
 %files -n salt-minion
 %defattr(-,root,root)
