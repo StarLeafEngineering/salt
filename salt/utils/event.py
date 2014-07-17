@@ -238,30 +238,21 @@ class SaltEvent(object):
         data = serial.loads(mdata)
         return mtag, data
 
-    def get_event(self, wait=5, tag='', full=False, use_pending=False):
-        '''
-        Get a single publication.
-        IF no publication available THEN block for upto wait seconds
-        AND either return publication OR None IF no publication available.
-
-        IF wait is 0 then block forever.
-
-        use_pending
-            Defines whether to keep all unconsumed events in a pending_events
-            list, or to discard events that don't match the requested tag.  If
-            set to True, MAY CAUSE MEMORY LEAKS.
-        '''
-        self.subscribe()
-
-        if use_pending:
-            for evt in [x for x in self.pending_events
-                        if x['tag'].startswith(tag)]:
-                self.pending_events.remove(evt)
-                if full:
-                    return evt
+    def _check_pending(self, tag, pending_tags):
+        old_events = self.pending_events
+        self.pending_events = []
+        ret = None
+        for evt in old_events:
+            if evt['tag'].startswith(tag):
+                if ret is None:
+                    ret = evt
                 else:
-                    return evt['data']
+                    self.pending_events.append(evt)
+            elif any(evt['tag'].startswith(ptag) for ptag in pending_tags):
+                self.pending_events.append(evt)
+        return ret
 
+    def _get_event(self, wait, tag, pending_tags):
         start = time.time()
         timeout_at = start + wait
         while not wait or time.time() <= timeout_at:
@@ -278,15 +269,52 @@ class SaltEvent(object):
                     raise
 
             if not ret['tag'].startswith(tag):  # tag not match
-                if use_pending:
+                if any(ret['tag'].startswith(ptag) for ptag in pending_tags):
                     self.pending_events.append(ret)
                 wait = timeout_at - time.time()
                 continue
 
-            if full:
-                return ret
-            return ret['data']
+            return ret
+
         return None
+
+    def get_event(self, wait=5, tag='', full=False, use_pending=False, pending_tags=None):
+        '''
+        Get a single publication.
+        IF no publication available THEN block for upto wait seconds
+        AND either return publication OR None IF no publication available.
+
+        IF wait is 0 then block forever.
+
+        New in Boron always checks the list of pending events
+
+        use_pending
+            Defines whether to keep all unconsumed events in a pending_events
+            list, or to discard events that don't match the requested tag.  If
+            set to True, MAY CAUSE MEMORY LEAKS.
+
+        pending_tags
+            Add any events matching the listed tags to the pending queue.
+            Still MAY CAUSE MEMORY LEAKS but less likely than use_pending
+            assuming you later get_event for the tags you've listed here
+
+            New in Boron
+        '''
+        self.subscribe()
+
+        if pending_tags is None:
+            pending_tags = []
+        if use_pending:
+            pending_tags = ['']
+
+        ret = self._check_pending(tag, pending_tags)
+        if ret is None:
+            ret = self._get_event(wait, tag, pending_tags)
+
+        if ret is None or full:
+            return ret
+        else:
+            return ret['data']
 
     def get_event_noblock(self):
         raw = self.sub.recv(zmq.NOBLOCK)
