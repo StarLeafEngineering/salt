@@ -18,7 +18,7 @@ args = parser.parse_args()
 
 src = abspath(join(dirname(__file__), '../..'))
 
-sys.path.append(src)
+sys.path.insert(0, src)
 
 import salt.version
 
