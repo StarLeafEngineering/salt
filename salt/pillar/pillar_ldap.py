@@ -11,6 +11,8 @@ The final result set is merged with the pillar data.
 '''
 
 # Import python libs
+from __future__ import print_function
+from __future__ import absolute_import
 import os
 import logging
 
@@ -21,7 +23,7 @@ from salt.exceptions import SaltInvocationError
 import yaml
 from jinja2 import Environment, FileSystemLoader
 try:
-    import ldap
+    import ldap  # pylint: disable=W0611
     HAS_LDAP = True
 except ImportError:
     HAS_LDAP = False
@@ -105,7 +107,7 @@ def _result_to_dict(data, result, conf):
                         data[skey] = [sval]
                     else:
                         data[skey].append(sval)
-    print 'Returning data {0}'.format(data)
+    print('Returning data {0}'.format(data))
     return data
 
 
@@ -149,7 +151,9 @@ def _do_search(conf):
     return result
 
 
-def ext_pillar(minion_id, pillar, config_file):
+def ext_pillar(minion_id,  # pylint: disable=W0613
+               pillar,  # pylint: disable=W0613
+               config_file):
     '''
     Execute LDAP searches and return the aggregated data
     '''
@@ -173,7 +177,7 @@ def ext_pillar(minion_id, pillar, config_file):
     for source in opts['search_order']:
         config = opts[source]
         result = _do_search(config)
-        print 'source {0} got result {1}'.format(source, result)
+        print('source {0} got result {1}'.format(source, result))
         if result:
             data = _result_to_dict(data, result, config)
     return data

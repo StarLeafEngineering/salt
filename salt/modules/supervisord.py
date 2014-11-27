@@ -4,13 +4,26 @@ Provide the service module for system supervisord or supervisord in a
 virtualenv
 '''
 
+
 # Import python libs
+from __future__ import absolute_import
 import os
+
+# Import 3rd-party libs
+from salt.ext.six import string_types
+from salt.ext.six.moves import configparser  # pylint: disable=import-error
 
 # Import salt libs
 import salt.utils
 from salt.exceptions import CommandExecutionError, CommandNotFoundError
-from salt._compat import configparser, string_types
+
+
+def __virtual__():
+    HAS_SUPER = salt.utils.which('supervisorctl')
+    if HAS_SUPER:
+        return True
+    else:
+        return False
 
 
 def _get_supervisorctl_bin(bin_env):
@@ -74,6 +87,8 @@ def start(name='all', user=None, conf_file=None, bin_env=None):
         salt '*' supervisord.start <service>
         salt '*' supervisord.start <group>:
     '''
+    if name.endswith(':*'):
+        name = name[:-1]
     ret = __salt__['cmd.run_all'](
         _ctl_cmd('start', name, conf_file, bin_env), runas=user
     )
@@ -100,6 +115,8 @@ def restart(name='all', user=None, conf_file=None, bin_env=None):
         salt '*' supervisord.restart <service>
         salt '*' supervisord.restart <group>:
     '''
+    if name.endswith(':*'):
+        name = name[:-1]
     ret = __salt__['cmd.run_all'](
         _ctl_cmd('restart', name, conf_file, bin_env), runas=user
     )
@@ -126,6 +143,8 @@ def stop(name='all', user=None, conf_file=None, bin_env=None):
         salt '*' supervisord.stop <service>
         salt '*' supervisord.stop <group>:
     '''
+    if name.endswith(':*'):
+        name = name[:-1]
     ret = __salt__['cmd.run_all'](
         _ctl_cmd('stop', name, conf_file, bin_env), runas=user
     )
@@ -152,6 +171,8 @@ def add(name, user=None, conf_file=None, bin_env=None):
     '''
     if name.endswith(':'):
         name = name[:-1]
+    elif name.endswith(':*'):
+        name = name[:-2]
     ret = __salt__['cmd.run_all'](
         _ctl_cmd('add', name, conf_file, bin_env), runas=user
     )
@@ -178,6 +199,8 @@ def remove(name, user=None, conf_file=None, bin_env=None):
     '''
     if name.endswith(':'):
         name = name[:-1]
+    elif name.endswith(':*'):
+        name = name[:-2]
     ret = __salt__['cmd.run_all'](
         _ctl_cmd('remove', name, conf_file, bin_env), runas=user
     )
@@ -334,7 +357,7 @@ def _read_config(conf_file=None):
 
 def options(name, conf_file=None):
     '''
-    .. versionadded:: 2014.1.0 (Hydrogen)
+    .. versionadded:: 2014.1.0
 
     Read the config file and return the config options for a given process
 
@@ -356,10 +379,12 @@ def options(name, conf_file=None):
     ret = {}
     for key, val in config.items(section_name):
         val = salt.utils.str_to_num(val.split(';')[0].strip())
+        # pylint: disable=maybe-no-member
         if isinstance(val, string_types):
             if val.lower() == 'true':
                 val = True
             elif val.lower() == 'false':
                 val = False
+        # pylint: enable=maybe-no-member
         ret[key] = val
     return ret

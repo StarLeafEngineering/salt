@@ -3,6 +3,7 @@
 The default service module, if not otherwise specified salt will fall back
 to this basic module
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -26,7 +27,7 @@ def __virtual__():
         'RedHat',
         'CentOS',
         'Amazon',
-        'Scientific',
+        'ScientificLinux',
         'CloudLinux',
         'Fedora',
         'Gentoo',
@@ -47,9 +48,14 @@ def __virtual__():
     if __grains__['kernel'] != 'Linux':
         return False
     # Suse >=12.0 uses systemd
-    if __grains__.get('os', '') == 'openSUSE':
+    if __grains__.get('os_family', '') == 'Suse':
         try:
-            if int(__grains__.get('osrelease', '').split('.')[0]) >= 12:
+            # osrelease might be in decimal format (e.g. "12.1"), or for
+            # SLES might include service pack (e.g. "11 SP3"), so split on
+            # non-digit characters, and the zeroth element is the major
+            # number (it'd be so much simpler if it was always "X.Y"...)
+            import re
+            if int(re.split(r'\D+', __grains__.get('osrelease', ''))[0]) >= 12:
                 return False
         except ValueError:
             return False
@@ -68,8 +74,8 @@ def start(name):
     '''
     cmd = os.path.join(
         _GRAINMAP.get(__grains__.get('os'), '/etc/init.d'),
-        name + ' start'
-    )
+        name
+    ) + ' start'
     return not __salt__['cmd.retcode'](cmd)
 
 
@@ -85,8 +91,8 @@ def stop(name):
     '''
     cmd = os.path.join(
         _GRAINMAP.get(__grains__.get('os'), '/etc/init.d'),
-        name + ' stop'
-    )
+        name
+    ) + ' stop'
     return not __salt__['cmd.retcode'](cmd)
 
 
@@ -102,8 +108,8 @@ def restart(name):
     '''
     cmd = os.path.join(
         _GRAINMAP.get(__grains__.get('os'), '/etc/init.d'),
-        name + ' restart'
-    )
+        name
+    ) + ' restart'
     return not __salt__['cmd.retcode'](cmd)
 
 
@@ -124,7 +130,8 @@ def status(name, sig=None):
 
 def reload_(name):
     '''
-    Restart the specified service
+    Refreshes config files by calling service reload. Does not perform a full
+    restart.
 
     CLI Example:
 
@@ -134,8 +141,8 @@ def reload_(name):
     '''
     cmd = os.path.join(
         _GRAINMAP.get(__grains__.get('os'), '/etc/init.d'),
-        name + ' reload'
-    )
+        name
+    ) + ' reload'
     return not __salt__['cmd.retcode'](cmd)
 
 
@@ -165,7 +172,7 @@ def missing(name):
 
         salt '*' service.missing sshd
     '''
-    return not name in get_all()
+    return name not in get_all()
 
 
 def get_all():

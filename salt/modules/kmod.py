@@ -2,6 +2,7 @@
 '''
 Module to manage Linux kernel modules
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -15,7 +16,7 @@ def __virtual__():
     '''
     Only runs on Linux systems
     '''
-    return 'kmod' if __grains__['kernel'] == 'Linux' else False
+    return __grains__['kernel'] == 'Linux'
 
 
 def _new_mods(pre_mods, post_mods):
@@ -129,7 +130,7 @@ def available():
     for root, dirs, files in os.walk(mod_dir):
         for fn_ in files:
             if '.ko' in fn_:
-                ret.append(fn_[:fn_.index('.ko')])
+                ret.append(fn_[:fn_.index('.ko')].replace('-', '_'))
     return sorted(list(ret))
 
 

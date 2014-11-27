@@ -6,6 +6,7 @@ These data can be useful for compiling into stats later.
 :depends:   - pythoncom
             - wmi
 '''
+from __future__ import absolute_import
 
 import logging
 import salt.utils
@@ -14,7 +15,6 @@ import salt.utils
 log = logging.getLogger(__name__)
 
 try:
-    import pythoncom
     import wmi
     import salt.utils.winapi
     has_required_packages = True

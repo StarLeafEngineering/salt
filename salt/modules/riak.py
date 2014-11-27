@@ -6,6 +6,7 @@ Riak Salt Module
 Author: David Boucha <boucha@gmail.com>
 
 '''
+from __future__ import absolute_import
 
 # Import salt libs
 import salt.utils
@@ -16,7 +17,7 @@ def __virtual__():
     Only available on systems with Riak installed.
     '''
     if salt.utils.which('riak'):
-        return 'riak'
+        return True
     return False
 
 

@@ -2,10 +2,12 @@
 '''
 Minion side functions for salt-cp
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 import logging
+import fnmatch
 
 # Import salt libs
 import salt.minion
@@ -22,7 +24,7 @@ def _auth():
     '''
     Return the auth object
     '''
-    if not 'auth' in __context__:
+    if 'auth' not in __context__:
         __context__['auth'] = salt.crypt.SAuth(__opts__)
     return __context__['auth']
 
@@ -57,14 +59,19 @@ def recv(files, dest):
 
 def _mk_client():
     '''
-    Create a file client and add it to the context
+    Create a file client and add it to the context.
     '''
-    if not 'cp.fileclient' in __context__:
+    if 'cp.fileclient' not in __context__:
         __context__['cp.fileclient'] = \
                 salt.fileclient.get_file_client(__opts__)
 
 
 def _render_filenames(path, dest, saltenv, template):
+    '''
+    Process markup in the :param:`path` and :param:`dest` variables (NOT the
+    files under the paths they ultimately point to) according to the markup
+    format provided by :param:`template`.
+    '''
     if not template:
         return (path, dest)
 
@@ -83,6 +90,10 @@ def _render_filenames(path, dest, saltenv, template):
     kwargs['saltenv'] = saltenv
 
     def _render(contents):
+        '''
+        Render :param:`contents` into a literal pathname by writing it to a
+        temp file, rendering that file, and returning the result.
+        '''
         # write out path to temp file
         tmp_path_fn = salt.utils.mkstemp()
         with salt.utils.fopen(tmp_path_fn, 'w+') as fp_:
@@ -171,9 +182,12 @@ def get_template(path,
                  template='jinja',
                  saltenv='base',
                  env=None,
+                 makedirs=False,
                  **kwargs):
     '''
-    Render a file as a template before setting it down
+    Render a file as a template before setting it down.
+    Warning, order is not the same as in fileclient.cp for
+    non breaking old API.
 
     CLI Example:
 
@@ -191,19 +205,19 @@ def get_template(path,
         saltenv = env
 
     _mk_client()
-    if not 'salt' in kwargs:
+    if 'salt' not in kwargs:
         kwargs['salt'] = __salt__
-    if not 'pillar' in kwargs:
+    if 'pillar' not in kwargs:
         kwargs['pillar'] = __pillar__
-    if not 'grains' in kwargs:
+    if 'grains' not in kwargs:
         kwargs['grains'] = __grains__
-    if not 'opts' in kwargs:
+    if 'opts' not in kwargs:
         kwargs['opts'] = __opts__
     return __context__['cp.fileclient'].get_template(
             path,
             dest,
             template,
-            False,
+            makedirs,
             saltenv,
             **kwargs)
 
@@ -286,7 +300,8 @@ def get_file_str(path, saltenv='base', env=None):
 
 def cache_file(path, saltenv='base', env=None):
     '''
-    Used to cache a single file in the local salt-master file cache.
+    Used to cache a single file on the salt-minion
+    Returns the location of the new cached file on the minion
 
     CLI Example:
 
@@ -307,6 +322,19 @@ def cache_file(path, saltenv='base', env=None):
     if path.startswith('salt://|'):
         # Strip pipe. Windows doesn't allow pipes in filenames
         path = 'salt://{0}'.format(path[8:])
+    env_splitter = '?saltenv='
+    if '?env=' in path:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using '
+            '\'saltenv\' not \'env\'. This functionality will be '
+            'removed in Salt Boron.'
+        )
+        env_splitter = '?env='
+    try:
+        path, saltenv = path.split(env_splitter)
+    except ValueError:
+        pass
     result = __context__['cp.fileclient'].cache_file(path, saltenv)
     if not result:
         log.error(
@@ -342,15 +370,38 @@ def cache_files(paths, saltenv='base', env=None):
     return __context__['cp.fileclient'].cache_files(paths, saltenv)
 
 
-def cache_dir(path, saltenv='base', include_empty=False, env=None):
+def cache_dir(path, saltenv='base', include_empty=False, include_pat=None,
+              exclude_pat=None, env=None):
     '''
     Download and cache everything under a directory from the master
 
-    CLI Example:
+
+    include_pat : None
+        Glob or regex to narrow down the files cached from the given path. If
+        matching with a regex, the regex must be prefixed with ``E@``,
+        otherwise the expression will be interpreted as a glob.
+
+        .. versionadded:: 2014.7.0
+
+    exclude_pat : None
+        Glob or regex to exclude certain files from being cached from the given
+        path. If matching with a regex, the regex must be prefixed with ``E@``,
+        otherwise the expression will be interpreted as a glob.
+
+        .. note::
+
+            If used with ``include_pat``, files matching this pattern will be
+            excluded from the subset of files defined by ``include_pat``.
+
+        .. versionadded:: 2014.7.0
+
+
+    CLI Examples:
 
     .. code-block:: bash
 
         salt '*' cp.cache_dir salt://path/to/dir
+        salt '*' cp.cache_dir salt://path/to/dir include_pat='E@*.py$'
     '''
     if env is not None:
         salt.utils.warn_until(
@@ -362,7 +413,9 @@ def cache_dir(path, saltenv='base', include_empty=False, env=None):
         saltenv = env
 
     _mk_client()
-    return __context__['cp.fileclient'].cache_dir(path, saltenv, include_empty)
+    return __context__['cp.fileclient'].cache_dir(
+        path, saltenv, include_empty, include_pat, exclude_pat
+    )
 
 
 def cache_master(saltenv='base', env=None):
@@ -580,7 +633,7 @@ def hash_file(path, saltenv='base', env=None):
     return __context__['cp.fileclient'].hash_file(path, saltenv)
 
 
-def push(path):
+def push(path, keep_symlinks=False):
     '''
     Push a file from the minion up to the master, the file will be saved to
     the salt master in the master's minion files cachedir
@@ -591,16 +644,24 @@ def push(path):
     ``file_recv`` to ``True`` in the master configuration file, and restart the
     master.
 
+    keep_symlinks
+        Keep the path value without resolving its canonical form
+
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' cp.push /etc/fstab
+        salt '*' cp.push /etc/system-release keep_symlinks=True
     '''
+    log.debug('Trying to copy {0!r} to master'.format(path))
     if '../' in path or not os.path.isabs(path):
+        log.debug('Path must be absolute, returning False')
         return False
-    path = os.path.realpath(path)
+    if not keep_symlinks:
+        path = os.path.realpath(path)
     if not os.path.isfile(path):
+        log.debug('Path failed os.path.isfile check, returning False')
         return False
     auth = _auth()
 
@@ -609,15 +670,53 @@ def push(path):
             'path': path.lstrip(os.sep),
             'tok': auth.gen_token('salt')}
     sreq = salt.transport.Channel.factory(__opts__)
-    # sreq = salt.payload.SREQ(__opts__['master_uri'])
     with salt.utils.fopen(path, 'rb') as fp_:
         while True:
             load['loc'] = fp_.tell()
             load['data'] = fp_.read(__opts__['file_buffer_size'])
             if not load['data']:
                 return True
-
-            # ret = sreq.send('aes', auth.crypticle.dumps(load))
             ret = sreq.send(load)
             if not ret:
+                log.error('cp.push Failed transfer failed. Ensure master has '
+                '\'file_recv\' set to \'True\' and that the file is not '
+                'larger than the \'file_recv_size_max\' setting on the master.')
                 return ret
+
+
+def push_dir(path, glob=None):
+    '''
+    Push a directory from the minion up to the master, the files will be saved
+    to the salt master in the master's minion files cachedir (defaults to
+    ``/var/cache/salt/master/minions/minion-id/files``).  It also has a glob
+    for matching specific files using globbing.
+
+    .. versionadded:: 2014.7.0
+
+    Since this feature allows a minion to push files up to the master server it
+    is disabled by default for security purposes. To enable, set ``file_recv``
+    to ``True`` in the master configuration file, and restart the master.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' cp.push /usr/lib/mysql
+        salt '*' cp.push_dir /etc/modprobe.d/ glob='*.conf'
+    '''
+    if '../' in path or not os.path.isabs(path):
+        return False
+    path = os.path.realpath(path)
+    if os.path.isfile(path):
+        return push(path)
+    else:
+        filelist = []
+        for root, dirs, files in os.walk(path):
+            filelist += [os.path.join(root, tmpfile) for tmpfile in files]
+        if glob is not None:
+            filelist = [fi for fi in filelist if fnmatch.fnmatch(fi, glob)]
+        for tmpfile in filelist:
+            ret = push(tmpfile)
+            if not ret:
+                return ret
+    return True

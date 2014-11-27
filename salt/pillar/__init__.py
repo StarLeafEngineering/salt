@@ -2,11 +2,13 @@
 '''
 Render the pillar data
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
 import collections
 import logging
+from copy import copy
 
 # Import salt libs
 import salt.loader
@@ -14,17 +16,36 @@ import salt.fileclient
 import salt.minion
 import salt.crypt
 import salt.transport
-from salt._compat import string_types
+from salt.ext.six import string_types
 from salt.template import compile_template
 from salt.utils.dictupdate import update
+from salt.utils.serializers.yamlex import merge_recursive
 from salt.utils.odict import OrderedDict
 from salt.version import __version__
+import salt.ext.six as six
 
 
 log = logging.getLogger(__name__)
 
 
-def get_pillar(opts, grains, id_, saltenv=None, ext=None, env=None):
+def merge_recurse(obj_a, obj_b):
+    copied = copy(obj_a)
+    return update(copied, obj_b)
+
+
+def merge_aggregate(obj_a, obj_b):
+    return merge_recursive(obj_a, obj_b, level=1)
+
+
+def merge_overwrite(obj_a, obj_b):
+    for obj in obj_b:
+        if obj in obj_a:
+            obj_a[obj] = obj_b[obj]
+            return obj_a
+    return merge_recurse(obj_a, obj_b)
+
+
+def get_pillar(opts, grains, id_, saltenv=None, ext=None, env=None, funcs=None):
     '''
     Return the correct pillar driver based on the file_client option
     '''
@@ -40,14 +61,14 @@ def get_pillar(opts, grains, id_, saltenv=None, ext=None, env=None):
     return {
             'remote': RemotePillar,
             'local': Pillar
-            }.get(opts['file_client'], Pillar)(opts, grains, id_, saltenv, ext)
+            }.get(opts['file_client'], Pillar)(opts, grains, id_, saltenv, ext, functions=funcs)
 
 
 class RemotePillar(object):
     '''
     Get the pillar from the master
     '''
-    def __init__(self, opts, grains, id_, saltenv, ext=None):
+    def __init__(self, opts, grains, id_, saltenv, ext=None, functions=None):
         self.opts = opts
         self.opts['environment'] = saltenv
         self.ext = ext
@@ -94,7 +115,7 @@ class Pillar(object):
         self.actual_file_roots = opts['file_roots']
         # use the local file client
         self.opts = self.__gen_opts(opts, grains, id_, saltenv, ext)
-        self.client = salt.fileclient.get_file_client(self.opts)
+        self.client = salt.fileclient.get_file_client(self.opts, True)
 
         if opts.get('file_client', '') == 'local':
             opts['grains'] = grains
@@ -114,6 +135,10 @@ class Pillar(object):
         # location of file_roots. Issue 5951
         ext_pillar_opts = dict(self.opts)
         ext_pillar_opts['file_roots'] = self.actual_file_roots
+        self.merge_strategy = 'smart'
+        if opts.get('pillar_source_merging_strategy'):
+            self.merge_strategy = opts['pillar_source_merging_strategy']
+
         self.ext_pillars = salt.loader.pillars(ext_pillar_opts, self.functions)
 
     def __valid_ext(self, ext):
@@ -257,9 +282,9 @@ class Pillar(object):
         '''
         Cleanly merge the top files
         '''
-        top = collections.defaultdict(dict)
-        orders = collections.defaultdict(dict)
-        for ctops in tops.values():
+        top = collections.defaultdict(OrderedDict)
+        orders = collections.defaultdict(OrderedDict)
+        for ctops in six.itervalues(tops):
             for ctop in ctops:
                 for saltenv, targets in ctop.items():
                     if saltenv == 'include':
@@ -283,7 +308,7 @@ class Pillar(object):
                             if isinstance(comp, string_types):
                                 states[comp] = True
                         top[saltenv][tgt] = matches
-                        top[saltenv][tgt].extend(list(states.keys()))
+                        top[saltenv][tgt].extend(states)
         return self.sort_top_targets(top, orders)
 
     def sort_top_targets(self, top, orders):
@@ -291,11 +316,13 @@ class Pillar(object):
         Returns the sorted high data from the merged top files
         '''
         sorted_top = collections.defaultdict(OrderedDict)
+        # pylint: disable=cell-var-from-loop
         for saltenv, targets in top.items():
-            sorted_targets = sorted(targets.keys(),
+            sorted_targets = sorted(targets,
                     key=lambda target: orders[saltenv][target])
             for target in sorted_targets:
                 sorted_top[saltenv][target] = targets[target]
+        # pylint: enable=cell-var-from-loop
         return sorted_top
 
     def get_top(self):
@@ -303,7 +330,12 @@ class Pillar(object):
         Returns the high data derived from the top file
         '''
         tops, errors = self.get_tops()
-        return self.merge_tops(tops), errors
+        try:
+            merged_tops = self.merge_tops(tops)
+        except TypeError as err:
+            merged_tops = OrderedDict()
+            errors.append('Error encountered while render pillar top file.')
+        return merged_tops, errors
 
     def top_matches(self, top):
         '''
@@ -341,20 +373,28 @@ class Pillar(object):
         errors = []
         fn_ = self.client.get_state(sls, saltenv).get('dest', False)
         if not fn_:
-            msg = ('Specified SLS {0!r} in environment {1!r} is not'
-                   ' available on the salt master').format(sls, saltenv)
-            log.error(msg)
-            errors.append(msg)
+            if self.opts['pillar_roots'].get(saltenv):
+                msg = ('Specified SLS {0!r} in environment {1!r} is not'
+                       ' available on the salt master').format(sls, saltenv)
+                log.error(msg)
+                errors.append(msg)
+            else:
+                log.debug('Specified SLS {0!r} in environment {1!r} is not'
+                          ' found, which might be due to environment {1!r}'
+                          ' not being present in "pillar_roots" yet!'
+                          .format(sls, saltenv))
+                # return state, mods, errors
+                return None, mods, errors
         state = None
         try:
             state = compile_template(
-                fn_, self.rend, self.opts['renderer'], saltenv, sls, **defaults)
+                fn_, self.rend, self.opts['renderer'], saltenv, sls, _pillar_rend=True, **defaults)
         except Exception as exc:
             msg = 'Rendering SLS {0!r} failed, render error:\n{1}'.format(
                 sls, exc
             )
             log.critical(msg)
-            errors.append(msg)
+            errors.append('Rendering SLS \'{0}\' failed. Please see master log for details.'.format(sls))
         mods.add(sls)
         nstate = None
         if state:
@@ -372,7 +412,7 @@ class Pillar(object):
                     else:
                         for sub_sls in state.pop('include'):
                             if isinstance(sub_sls, dict):
-                                sub_sls, v = sub_sls.iteritems().next()
+                                sub_sls, v = next(sub_sls.iteritems())
                                 defaults = v.get('defaults', {})
                                 key = v.get('key', None)
                             else:
@@ -386,9 +426,12 @@ class Pillar(object):
                                         )
                             if nstate:
                                 if key:
-                                    state[key] = nstate
-                                else:
-                                    state.update(nstate)
+                                    nstate = {
+                                        key: nstate
+                                    }
+
+                                state = self.merge_sources(state, nstate)
+
                             if err:
                                 errors += err
         return state, mods, errors
@@ -420,19 +463,50 @@ class Pillar(object):
                             )
                         )
                         continue
-                    update(pillar, pstate)
+                    pillar = self.merge_sources(pillar, pstate)
 
         return pillar, errors
 
-    def ext_pillar(self, pillar):
+    def _external_pillar_data(self,
+                             pillar,
+                             val,
+                             pillar_dirs,
+                             key):
+        '''
+        Builds actual pillar data structure
+        and update
+        the variable ``pillar``
+        '''
+
+        ext = None
+
+        # try the new interface, which includes the minion ID
+        # as first argument
+        if isinstance(val, dict):
+            ext = self.ext_pillars[key](self.opts['id'], pillar, **val)
+        elif isinstance(val, list):
+            ext = self.ext_pillars[key](self.opts['id'], pillar, *val)
+        else:
+            if key == 'git':
+                ext = self.ext_pillars[key](self.opts['id'],
+                                            val,
+                                            pillar_dirs)
+            else:
+                ext = self.ext_pillars[key](self.opts['id'],
+                                            pillar,
+                                            val)
+        return ext
+
+    def ext_pillar(self, pillar, pillar_dirs):
         '''
         Render the external pillar data
         '''
-        if not 'ext_pillar' in self.opts:
-            return {}
+        if 'ext_pillar' not in self.opts:
+            return pillar
         if not isinstance(self.opts['ext_pillar'], list):
             log.critical('The "ext_pillar" option is malformed')
-            return {}
+            return pillar
+        ext = None
         for run in self.opts['ext_pillar']:
             if not isinstance(run, dict):
                 log.critical('The "ext_pillar" option is malformed')
@@ -445,32 +519,22 @@ class Pillar(object):
                     continue
                 try:
                     try:
-                        # try the new interface, which includes the minion ID
-                        # as first argument
-                        if isinstance(val, dict):
-                            ext = self.ext_pillars[key](self.opts['id'], pillar, **val)
-                        elif isinstance(val, list):
-                            ext = self.ext_pillars[key](self.opts['id'], pillar, *val)
-                        else:
-                            ext = self.ext_pillars[key](self.opts['id'], pillar, val)
-                        update(pillar, ext)
-
-                    except TypeError as e:
-                        if e.message.startswith('ext_pillar() takes exactly '):
+                        ext = self._external_pillar_data(pillar,
+                                                         val,
+                                                         pillar_dirs,
+                                                         key)
+                    except TypeError as exc:
+                        if str(exc).startswith('ext_pillar() takes exactly '):
                             log.warning('Deprecation warning: ext_pillar "{0}"'
                                         ' needs to accept minion_id as first'
                                         ' argument'.format(key))
                         else:
                             raise
 
-                        if isinstance(val, dict):
-                            ext = self.ext_pillars[key](pillar, **val)
-                        elif isinstance(val, list):
-                            ext = self.ext_pillars[key](pillar, *val)
-                        else:
-                            ext = self.ext_pillars[key](pillar, val)
-                        update(pillar, ext)
-
+                        ext = self._external_pillar_data(pillar,
+                                                         val,
+                                                         pillar_dirs,
+                                                         key)
                 except Exception as exc:
                     log.exception(
                             'Failed to load ext_pillar {0}: {1}'.format(
@@ -478,16 +542,53 @@ class Pillar(object):
                                 exc
                                 )
                             )
+            if ext:
+                pillar = self.merge_sources(pillar, ext)
+                ext = None
         return pillar
 
-    def compile_pillar(self):
+    def merge_sources(self, obj_a, obj_b):
+        strategy = self.merge_strategy
+
+        if strategy == 'smart':
+            renderer = self.opts.get('renderer', 'yaml')
+            if renderer == 'yamlex' or renderer.startswith('yamlex_'):
+                strategy = 'aggregate'
+            else:
+                strategy = 'recurse'
+
+        if strategy == 'recurse':
+            merged = merge_recurse(obj_a, obj_b)
+        elif strategy == 'aggregate':
+            #: level = 1 merge at least root data
+            merged = merge_aggregate(obj_a, obj_b)
+        elif strategy == 'overwrite':
+            merged = merge_overwrite(obj_a, obj_b)
+        else:
+            log.warning('unknown merging strategy {0}, '
+                        'fallback to recurse'.format(strategy))
+            merged = merge_recurse(obj_a, obj_b)
+
+        return merged
+
+    def compile_pillar(self, ext=True, pillar_dirs=None):
         '''
         Render the pillar data and return
         '''
         top, terrors = self.get_top()
-        matches = self.top_matches(top)
-        pillar, errors = self.render_pillar(matches)
-        self.ext_pillar(pillar)
+        if ext:
+            if self.opts.get('ext_pillar_first', False):
+                self.opts['pillar'] = self.ext_pillar({}, pillar_dirs)
+                matches = self.top_matches(top)
+                pillar, errors = self.render_pillar(matches)
+                pillar = self.merge_sources(pillar, self.opts['pillar'])
+            else:
+                matches = self.top_matches(top)
+                pillar, errors = self.render_pillar(matches)
+                pillar = self.ext_pillar(pillar, pillar_dirs)
+        else:
+            matches = self.top_matches(top)
+            pillar, errors = self.render_pillar(matches)
         errors.extend(terrors)
         if self.opts.get('pillar_opts', True):
             mopts = dict(self.opts)

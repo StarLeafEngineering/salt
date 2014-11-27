@@ -3,21 +3,26 @@
 # Import python libs
 import os
 import tempfile
-import urllib2
 import logging
+import shutil
+
+# Import 3rd-party libs
+# pylint: disable=import-error,no-name-in-module,redefined-builtin
+from salt.ext.six.moves.urllib.error import URLError
+from salt.ext.six.moves.urllib.request import urlopen
+# pylint: enable=import-error,no-name-in-module,redefined-builtin
 
 # Import Salt Testing libs
 from salttesting import TestCase, skipIf
 from salttesting.helpers import (
     ensure_in_syspath,
     requires_network,
+    skip_if_binaries_missing
 )
-
-ensure_in_syspath('../../')
-import integration
-import shutil
+ensure_in_syspath('../..')
 
 # Import Salt libs
+import integration  # pylint: disable=import-error
 import salt.utils
 from salt.modules import zcbuildout as buildout
 from salt.modules import cmdmod as cmd
@@ -51,9 +56,7 @@ log = logging.getLogger(__name__)
 
 def download_to(url, dest):
     with salt.utils.fopen(dest, 'w') as fic:
-        fic.write(
-            urllib2.urlopen(url, timeout=10).read()
-        )
+        fic.write(urlopen(url, timeout=10).read())
 
 
 class Base(TestCase):
@@ -70,7 +73,7 @@ class Base(TestCase):
             )
             try:
                 download_to(url, dest)
-            except urllib2.URLError:
+            except URLError:
                 log.debug('Failed to download {0}'.format(url))
         # creating a new setuptools install
         cls.ppy_st = os.path.join(cls.rdir, 'psetuptools')
@@ -113,6 +116,7 @@ class Base(TestCase):
 
 @skipIf(salt.utils.which_bin(KNOWN_VIRTUALENV_BINARY_NAMES) is None,
         'The \'virtualenv\' packaged needs to be installed')
+@skip_if_binaries_missing(['tar'])
 class BuildoutTestCase(Base):
 
     @requires_network()
@@ -150,13 +154,9 @@ class BuildoutTestCase(Base):
 
         self.assertTrue(u'Log summary:\n' in ret1['outlog'])
         self.assertTrue(
-            u'\n'
             u'INFO: ibar\n'
-            u'\n'
             u'WARN: wbar\n'
-            u'\n'
             u'DEBUG: dbar\n'
-            u'\n'
             u'ERROR: ebar\n'
             in ret1['outlog']
         )
@@ -296,6 +296,7 @@ class BuildoutTestCase(Base):
 
 @skipIf(salt.utils.which_bin(KNOWN_VIRTUALENV_BINARY_NAMES) is None,
         'The \'virtualenv\' packaged needs to be installed')
+@skipIf(True, 'These tests are not running reliably')
 class BuildoutOnlineTestCase(Base):
 
     @classmethod
@@ -358,7 +359,7 @@ class BuildoutOnlineTestCase(Base):
         b2_dir = os.path.join(self.tdir, 'b', 'b2')
         self.assertTrue(buildout._has_old_distribute(self.py_dis))
         # this is too hard to check as on debian & other where old
-        # packages are present (virtualenv), we cant have
+        # packages are present (virtualenv), we can't have
         # a clean site-packages
         # self.assertFalse(buildout._has_old_distribute(self.py_blank))
         self.assertFalse(buildout._has_old_distribute(self.py_st))
@@ -412,7 +413,7 @@ class BuildoutOnlineTestCase(Base):
         ret = buildout.bootstrap(b_dir, buildout_ver=2, python=self.py_st)
         self.assertTrue(ret['status'])
         ret = buildout.run_buildout(b_dir,
-                                    parts=['a', 'b'], python=self.py_st)
+                                    parts=['a', 'b'])
         out = ret['out']
         self.assertTrue('Installing a' in out)
         self.assertTrue('Installing b' in out)
@@ -451,9 +452,49 @@ class BuildoutOnlineTestCase(Base):
         self.assertTrue('buildout -c buildout.cfg -n install a' in comment)
 
 
+class BuildoutAPITestCase(TestCase):
+
+    def test_merge(self):
+        buildout.LOG.clear()
+        buildout.LOG.info('àé')
+        buildout.LOG.info(u'àé')
+        buildout.LOG.error('àé')
+        buildout.LOG.error(u'àé')
+        ret1 = buildout._set_status({}, out='éà')
+        uret1 = buildout._set_status({}, out=u'éà')
+        buildout.LOG.clear()
+        buildout.LOG.info('ççàé')
+        buildout.LOG.info(u'ççàé')
+        buildout.LOG.error('ççàé')
+        buildout.LOG.error(u'ççàé')
+        ret2 = buildout._set_status({}, out='çéà')
+        uret2 = buildout._set_status({}, out=u'çéà')
+        uretm = buildout._merge_statuses([ret1, uret1, ret2, uret2])
+        for ret in ret1, uret1, ret2, uret2:
+            out = ret['out']
+            if not isinstance(ret['out'], unicode):
+                out = ret['out'].decode('utf-8')
+
+        for out in ['àé', 'ççàé']:
+            self.assertTrue(out in uretm['logs_by_level']['info'])
+            self.assertTrue(out in uretm['outlog_by_level'])
+
+    def test_setup(self):
+        buildout.LOG.clear()
+        buildout.LOG.info('àé')
+        buildout.LOG.info(u'àé')
+        buildout.LOG.error('àé')
+        buildout.LOG.error(u'àé')
+        ret = buildout._set_status({}, out='éà')
+        uret = buildout._set_status({}, out=u'éà')
+        self.assertTrue(ret['outlog'] == uret['outlog'])
+        self.assertTrue('àé' in uret['outlog_by_level'])
+
+
 if __name__ == '__main__':
-    from integration import run_tests
+    from integration import run_tests  # pylint: disable=import-error
     run_tests(
+        BuildoutAPITestCase,
         BuildoutTestCase,
         BuildoutOnlineTestCase,
         needs_daemon=False)

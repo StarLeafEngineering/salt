@@ -61,6 +61,8 @@ class SysModuleTest(integration.ModuleCase):
                 'runtests_decorators.depends_will_fallback',
                 'runtests_decorators.missing_depends',
                 'runtests_decorators.missing_depends_will_fallback',
+                'yumpkg.expand_repo_def',
+                'yumpkg5.expand_repo_def',
         )
 
         for fun in docs:
@@ -77,8 +79,8 @@ class SysModuleTest(integration.ModuleCase):
             return
 
         raise AssertionError(
-            'There are some functions which do not have a doctring or do not '
-            'have an example:\nNo doctring:\n{0}\nNo example:\n{1}\n'.format(
+            'There are some functions which do not have a docstring or do not '
+            'have an example:\nNo docstring:\n{0}\nNo example:\n{1}\n'.format(
                 '\n'.join(['  - {0}'.format(f) for f in sorted(nodoc)]),
                 '\n'.join(['  - {0}'.format(f) for f in sorted(noexample)]),
             )

@@ -2,6 +2,7 @@
 '''
 Support for reboot, shutdown, etc
 '''
+from __future__ import absolute_import
 
 import salt.utils
 
@@ -12,7 +13,7 @@ def __virtual__():
     '''
     if salt.utils.is_windows() or not salt.utils.which('shutdown'):
         return False
-    return 'system'
+    return True
 
 
 def halt():

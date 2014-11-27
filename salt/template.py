@@ -3,26 +3,21 @@
 Manage basic template commands
 '''
 
+from __future__ import absolute_import
+
 # Import python libs
 import time
 import os
 import codecs
 import logging
-from cStringIO import StringIO as cStringIO
-from StringIO import StringIO as pyStringIO
 
 # Import salt libs
 import salt.utils
-from salt._compat import string_types
+from salt._compat import string_io
+from salt.ext.six import string_types
 
 log = logging.getLogger(__name__)
 
-
-def string_io(data=None):  # cStringIO can't handle unicode
-    try:
-        return cStringIO(bytes(data))
-    except UnicodeEncodeError:
-        return pyStringIO(data)
 
 #FIXME: we should make the default encoding of a .sls file a configurable
 #       option in the config, and default it to 'utf-8'.
@@ -41,6 +36,16 @@ def compile_template(template,
     Take the path to a template and return the high data structure
     derived from the template.
     '''
+
+    # We "map" env to the same as saltenv until Boron is out in order to follow the same deprecation path
+    kwargs.setdefault('env', saltenv)
+    salt.utils.warn_until(
+        'Boron',
+        'We are only supporting \'env\' in the templating context until Boron comes out. '
+        'Once this warning is shown, please remove the above mapping',
+        _dont_call_warnings=True
+    )
+
     # Template was specified incorrectly
     if not isinstance(template, string_types):
         return {}
@@ -77,7 +82,7 @@ def compile_template(template,
             time.sleep(0.01)
             ret = render(input_data, saltenv, sls, **render_kwargs)
         input_data = ret
-        if log.isEnabledFor(logging.GARBAGE):
+        if log.isEnabledFor(logging.GARBAGE):  # pylint: disable=no-member
             try:
                 log.debug('Rendered data from file: {0}:\n{1}'.format(
                     template,
@@ -123,8 +128,8 @@ def template_shebang(template, renderers, default):
     with salt.utils.fopen(template, 'r') as ifile:
         line = ifile.readline()
 
-        # Check if it starts with a shebang
-        if line.startswith('#!'):
+        # Check if it starts with a shebang and not a path
+        if line.startswith('#!') and not line.startswith('#!/'):
 
             # pull out the shebang data
             render_pipe = check_render_pipe_str(line.strip()[2:], renderers)
@@ -135,22 +140,25 @@ def template_shebang(template, renderers, default):
     return render_pipe
 
 
-# A dict of combined renderer(ie, rend1_rend2_...) to
-# render-pipe(ie, rend1|rend2|...)
+# A dict of combined renderer (i.e., rend1_rend2_...) to
+# render-pipe (i.e., rend1|rend2|...)
 #
 OLD_STYLE_RENDERERS = {}
 
-for comb in """
-    yaml_jinja
-    yaml_mako
-    yaml_wempy
-    json_jinja
-    json_mako
-    json_wempy
-    """.strip().split():
+for comb in '''
+        yaml_jinja
+        yaml_mako
+        yaml_wempy
+        json_jinja
+        json_mako
+        json_wempy
+        yamlex_jinja
+        yamlexyamlex_mako
+        yamlexyamlex_wempy
+        '''.strip().split():
 
     fmt, tmpl = comb.split('_')
-    OLD_STYLE_RENDERERS[comb] = "%s|%s" % (tmpl, fmt)
+    OLD_STYLE_RENDERERS[comb] = '{0}|{1}'.format(tmpl, fmt)
 
 
 def check_render_pipe_str(pipestr, renderers):

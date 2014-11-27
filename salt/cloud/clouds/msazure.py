@@ -15,6 +15,7 @@ configuration at ``/etc/salt/cloud.providers`` or
       provider: azure
       subscription_id: 3287abc8-f98a-c678-3bde-326766fd3617
       certificate_path: /etc/salt/azure.pem
+      management_host: management.core.windows.net
 
 Information on creating the pem file to use, and uploading the associated cer
 file can be found at:
@@ -22,6 +23,8 @@ file can be found at:
 http://www.windowsazure.com/en-us/develop/python/how-to-guides/service-management/
 '''
 # pylint: disable=E0102
+
+from __future__ import absolute_import
 
 # Import python libs
 import time
@@ -32,7 +35,7 @@ import logging
 # Import salt cloud libs
 import salt.config as config
 import salt.utils.cloud
-from salt.cloud.exceptions import SaltCloudSystemExit
+from salt.exceptions import SaltCloudSystemExit
 
 # Import azure libs
 HAS_LIBS = False
@@ -59,13 +62,8 @@ def __virtual__():
         return False
 
     if get_configured_provider() is False:
-        log.debug(
-            'There is no Azure cloud provider configuration available. Not '
-            'loading module.'
-        )
         return False
 
-    log.debug('Loading Azure cloud module')
     return __virtualname__
 
 
@@ -76,7 +74,7 @@ def get_configured_provider():
     return config.is_provider_configured(
         __opts__,
         __active_provider_name__ or __virtualname__,
-        ('subscription_id', 'certificate_path',)
+        ('subscription_id', 'certificate_path')
     )
 
 
@@ -92,8 +90,15 @@ def get_conn():
         'subscription_id',
         get_configured_provider(), __opts__, search_global=False
     )
+    management_host = config.get_cloud_config_value(
+        'management_host',
+        get_configured_provider(),
+        __opts__,
+        search_global=False,
+        default='management.core.windows.net'
+    )
     return azure.servicemanagement.ServiceManagementService(
-        subscription_id, certificate_path
+        subscription_id, certificate_path, management_host
     )
 
 
@@ -213,6 +218,14 @@ def avail_sizes(call=None):
             'name': 'A7',
             'description': '8 cores, 56GB RAM',
         },
+        'A8': {
+            'name': 'A8',
+            'description': '8 cores, 56GB RAM, 40 Gbit/s InfiniBand',
+        },
+        'A9': {
+            'name': 'A9',
+            'description': '16 cores, 112GB RAM, 40 Gbit/s InfiniBand',
+        },
     }
 
 
@@ -258,10 +271,11 @@ def list_nodes_full(conn=None, call=None):
             role_instances = deploy_dict['role_instance_list']
             for role_instance in role_instances:
                 ip_address = role_instances[role_instance]['ip_address']
-                if salt.utils.cloud.is_public_ip(ip_address):
-                    ret[deployment]['public_ips'].append(ip_address)
-                else:
-                    ret[deployment]['private_ips'].append(ip_address)
+                if ip_address:
+                    if salt.utils.cloud.is_public_ip(ip_address):
+                        ret[deployment]['public_ips'].append(ip_address)
+                    else:
+                        ret[deployment]['private_ips'].append(ip_address)
                 ret[deployment]['size'] = role_instances[role_instance]['instance_size']
             roles = deploy_dict['role_list']
             for role in roles:
@@ -390,6 +404,7 @@ def show_instance(name, call=None):
         )
 
     nodes = list_nodes_full()
+    salt.utils.cloud.cache_node(nodes[name], __active_provider_name__, __opts__)
     return nodes[name]
 
 
@@ -406,6 +421,7 @@ def create(vm_):
             'profile': vm_['profile'],
             'provider': vm_['provider'],
         },
+        transport=__opts__['transport']
     )
 
     log.info('Creating Cloud VM {0}'.format(vm_['name']))
@@ -466,6 +482,7 @@ def create(vm_):
         'requesting instance',
         'salt/cloud/{0}/requesting'.format(vm_['name']),
         event_kwargs,
+        transport=__opts__['transport']
     )
     log.debug('vm_kwargs: {0}'.format(vm_kwargs))
 
@@ -473,18 +490,31 @@ def create(vm_):
     # Can open up specific ports in Azure; but not on Windows
 
     try:
-        hosted_service = conn.create_hosted_service(**service_kwargs)
-        vm_deployment = conn.create_virtual_machine_deployment(**vm_kwargs)
+        conn.create_hosted_service(**service_kwargs)
+        conn.create_virtual_machine_deployment(**vm_kwargs)
     except Exception as exc:
-        log.error(
-            'Error creating {0} on Azure\n\n'
-            'The following exception was thrown when trying to '
-            'run the initial deployment: \n{1}'.format(
-                vm_['name'], exc.message
-            ),
-            # Show the traceback if the debug logging level is enabled
-            exc_info=log.isEnabledFor(logging.DEBUG)
-        )
+        error = 'The hosted service name is invalid.'
+        if error in str(exc):
+            log.error(
+                'Error creating {0} on Azure.\n\n'
+                'The hosted service name is invalid. The name can contain '
+                'only letters, numbers, and hyphens. The name must start with '
+                'a letter and must end with a letter or a number.'.format(
+                    vm_['name']
+                ),
+                # Show the traceback if the debug logging level is enabled
+                exc_info_on_loglevel=logging.DEBUG
+            )
+        else:
+            log.error(
+                'Error creating {0} on Azure\n\n'
+                'The following exception was thrown when trying to '
+                'run the initial deployment: \n{1}'.format(
+                    vm_['name'], str(exc)
+                ),
+                # Show the traceback if the debug logging level is enabled
+                exc_info_on_loglevel=logging.DEBUG
+            )
         return False
 
     def wait_for_hostname():
@@ -523,6 +553,7 @@ def create(vm_):
     if config.get_cloud_config_value('deploy', vm_, __opts__) is True:
         deploy_script = script(vm_)
         deploy_kwargs = {
+            'opts': __opts__,
             'host': hostname,
             'username': ssh_username,
             'password': ssh_password,
@@ -561,7 +592,8 @@ def create(vm_):
             'script_env': config.get_cloud_config_value(
                 'script_env', vm_, __opts__
             ),
-            'minion_conf': salt.utils.cloud.minion_config(__opts__, vm_)
+            'minion_conf': salt.utils.cloud.minion_config(__opts__, vm_),
+            'has_ssh_agent': False
         }
 
         # Deploy salt-master files, if necessary
@@ -606,6 +638,7 @@ def create(vm_):
             'executing deploy script',
             'salt/cloud/{0}/deploying'.format(vm_['name']),
             {'kwargs': event_kwargs},
+            transport=__opts__['transport']
         )
 
         deployed = False
@@ -642,6 +675,7 @@ def create(vm_):
             'profile': vm_['profile'],
             'provider': vm_['provider'],
         },
+        transport=__opts__['transport']
     )
 
     return ret
@@ -668,6 +702,8 @@ def destroy(name, conn=None, call=None):
     ret[name] = {
         'request_id': del_vm.request_id,
     }
+    if __opts__.get('update_cachedir', False) is True:
+        salt.utils.cloud.delete_minion_cachedir(name, __active_provider_name__.split(':')[0], __opts__)
     return ret
 
 

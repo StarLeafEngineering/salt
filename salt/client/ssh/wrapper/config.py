@@ -2,6 +2,7 @@
 '''
 Return config information
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import re
@@ -76,7 +77,10 @@ def manage_mode(mode):
     '''
     if mode is None:
         return None
-    return str(mode).lstrip('0').zfill(3)
+    ret = str(mode).lstrip('0').zfill(4)
+    if ret[0] != '0':
+        return '0{0}'.format(ret)
+    return ret
 
 
 def valid_fileproto(uri):
@@ -210,16 +214,16 @@ def get(key, default=''):
 
         salt '*' config.get pkg:apache
     '''
-    ret = salt.utils.traverse_dict(__opts__, key, '_|-')
+    ret = salt.utils.traverse_dict_and_list(__opts__, key, '_|-')
     if ret != '_|-':
         return ret
-    ret = salt.utils.traverse_dict(__grains__, key, '_|-')
+    ret = salt.utils.traverse_dict_and_list(__grains__, key, '_|-')
     if ret != '_|-':
         return ret
-    ret = salt.utils.traverse_dict(__pillar__, key, '_|-')
+    ret = salt.utils.traverse_dict_and_list(__pillar__, key, '_|-')
     if ret != '_|-':
         return ret
-    ret = salt.utils.traverse_dict(__pillar__.get('master', {}), key, '_|-')
+    ret = salt.utils.traverse_dict_and_list(__pillar__.get('master', {}), key, '_|-')
     if ret != '_|-':
         return ret
     return default

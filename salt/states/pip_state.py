@@ -18,6 +18,7 @@ requisite to a pkg.installed state for the package which provides pip
         - require:
           - pkg: python-pip
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -30,10 +31,20 @@ from salt.exceptions import CommandExecutionError, CommandNotFoundError
 # Import 3rd-party libs
 try:
     import pip
-    import pip.req
     HAS_PIP = True
 except ImportError:
     HAS_PIP = False
+
+if HAS_PIP is True:
+    try:
+        import pip.req
+    except ImportError:
+        HAS_PIP = False
+        # Remove references to the loaded pip module above so reloading works
+        import sys
+        del pip
+        if 'pip' in sys.modules:
+            del sys.modules['pip']
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +95,7 @@ def installed(name,
               env=None,
               bin_env=None,
               use_wheel=False,
+              no_use_wheel=False,
               log=None,
               proxy=None,
               timeout=None,
@@ -107,12 +119,20 @@ def installed(name,
               no_install=False,
               no_download=False,
               install_options=None,
+              global_options=None,
               user=None,
               runas=None,
               no_chown=False,
               cwd=None,
               activate=False,
-              pre_releases=False):
+              pre_releases=False,
+              cert=None,
+              allow_all_external=False,
+              allow_external=None,
+              allow_unverified=None,
+              process_dependency_links=False,
+              env_vars=None,
+              use_vt=False):
     '''
     Make sure the package is installed
 
@@ -121,7 +141,9 @@ def installed(name,
         numbers here using the standard operators ``==, >=, <=``. If
         ``requirements`` is given, this parameter will be ignored.
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
         django:
           pip.installed:
@@ -132,18 +154,132 @@ def installed(name,
     This will install the latest Django version greater than 1.6 but less
     than 1.7.
 
+    requirements
+        Path to a pip requirements file. If the path begins with salt://
+        the file will be transferred from the master file server.
+
     user
         The user under which to run pip
 
     use_wheel : False
         Prefer wheel archives (requires pip>=1.4)
 
+    no_use_wheel : False
+        Force to not use wheel archives (requires pip>=1.4)
+
+    log
+        Log file where a complete (maximum verbosity) record will be kept
+
+    proxy
+        Specify a proxy in the form
+        user:passwd@proxy.server:port. Note that the
+        user:password@ is optional and required only if you
+        are behind an authenticated proxy.  If you provide
+        user@proxy.server:port then you will be prompted for a
+        password.
+
+    timeout
+        Set the socket timeout (default 15 seconds)
+
+    editable
+        install something editable (i.e.
+        git+https://github.com/worldcompany/djangoembed.git#egg=djangoembed)
+
+    find_links
+        URL to look for packages at
+
+    index_url
+        Base URL of Python Package Index
+
+    extra_index_url
+        Extra URLs of package indexes to use in addition to ``index_url``
+
+    no_index
+        Ignore package index
+
+    mirrors
+        Specific mirror URL(s) to query (automatically adds --use-mirrors)
+
+    build
+        Unpack packages into ``build`` dir
+
+    target
+        Install packages into ``target`` dir
+
+    download
+        Download packages into ``download`` instead of installing them
+
+    download_cache
+        Cache downloaded packages in ``download_cache`` dir
+
+    source
+        Check out ``editable`` packages into ``source`` dir
+
+    upgrade
+        Upgrade all packages to the newest available version
+
+    force_reinstall
+        When upgrading, reinstall all packages even if they are already
+        up-to-date.
+
+    ignore_installed
+        Ignore the installed packages (reinstalling instead)
+
+    exists_action
+        Default action when a path already exists: (s)witch, (i)gnore, (w)ipe,
+        (b)ackup
+
+    no_deps
+        Ignore package dependencies
+
+    no_install
+        Download and unpack all packages, but don't actually install them
+
+    no_chown
+        When user is given, do not attempt to copy and chown
+        a requirements file
+
+    cwd
+        Current working directory to run pip from
+
+    activate
+        Activates the virtual environment, if given via bin_env,
+        before running install.
+
+    pre_releases
+        Include pre-releases in the available versions
+
+    cert
+        Provide a path to an alternate CA bundle
+
+    allow_all_external
+        Allow the installation of all externally hosted files
+
+    allow_external
+        Allow the installation of externally hosted files (comma separated list)
+
+    allow_unverified
+        Allow the installation of insecure and unverifiable files (comma separated list)
+
+    process_dependency_links
+        Enable the processing of dependency links
+
     bin_env : None
         Absolute path to a virtual environment directory or absolute path to
         a pip executable. The example below assumes a virtual environment
         has been created at ``/foo/.virtualenvs/bar``.
 
-    Example::
+    env_vars
+        Add or modify environment variables. Useful for tweaking build steps,
+        such as specifying INCLUDE or LIBRARY paths in Makefiles, build scripts or
+        compiler calls.
+
+    use_vt
+        Use VT terminal emulation (see ouptut while installing)
+
+    Example:
+
+    .. code-block:: yaml
 
         django:
           pip.installed:
@@ -154,7 +290,9 @@ def installed(name,
 
     Or
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
         django:
           pip.installed:
@@ -176,6 +314,30 @@ def installed(name,
     .. versionchanged:: 0.17.0
         ``use_wheel`` option added.
 
+    install_options
+
+        Extra arguments to be supplied to the setup.py install command.
+        If you are using an option with a directory path, be sure to use
+        absolute path.
+
+        Example:
+
+        .. code-block:: yaml
+
+            django:
+              pip.installed:
+                - name: django
+                - install_options:
+                  - --prefix=/blah
+                - require:
+                  - pkg: python-pip
+
+    global_options
+        Extra global options to be supplied to the setup.py call before the
+        install command.
+
+        .. versionadded:: 2014.1.3
+
     .. admonition:: Attention
 
         As of Salt 0.17.0 the pip state **needs** an importable pip module.
@@ -183,12 +345,12 @@ def installed(name,
         Salt from an active `virtualenv`_.
 
         The reason for this requirement is because ``pip`` already does a
-        pretty good job parsing it's own requirements. It makes no sense for
+        pretty good job parsing its own requirements. It makes no sense for
         Salt to do ``pip`` requirements parsing and validation before passing
         them to the ``pip`` library. It's functionality duplication and it's
         more error prone.
 
-    .. _`virtualenv`: http://www.virtualenv.org
+    .. _`virtualenv`: http://www.virtualenv.org/en/latest/
     '''
     if pip_bin and not bin_env:
         bin_env = pip_bin
@@ -208,6 +370,17 @@ def installed(name,
                               'was {1}.').format(min_version, cur_version)
             return ret
 
+    if no_use_wheel:
+        min_version = '1.4'
+        cur_version = __salt__['pip.version'](bin_env)
+        if not salt.utils.compare_versions(ver1=cur_version, oper='>=',
+                                           ver2=min_version):
+            ret['result'] = False
+            ret['comment'] = ('The \'no_use_wheel\' option is only supported in '
+                              'pip {0} and newer. The version of pip detected '
+                              'was {1}.').format(min_version, cur_version)
+            return ret
+
     if repo is not None:
         msg = ('The \'repo\' argument to pip.installed is deprecated and will '
                'be removed in Salt {version}. Please use \'name\' instead. '
@@ -215,10 +388,9 @@ def installed(name,
                'value of repo, {1!r}'.format(
                    name,
                    repo,
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
         name = repo
 
@@ -280,10 +452,9 @@ def installed(name,
         msg = ('The \'runas\' argument to pip.installed is deprecated, and '
                'will be removed in Salt {version}. Please use \'user\' '
                'instead.'.format(
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
 
         # "There can only be one"
@@ -355,6 +526,7 @@ def installed(name,
         requirements=requirements,
         bin_env=bin_env,
         use_wheel=use_wheel,
+        no_use_wheel=no_use_wheel,
         log=log,
         proxy=proxy,
         timeout=timeout,
@@ -377,12 +549,20 @@ def installed(name,
         no_install=no_install,
         no_download=no_download,
         install_options=install_options,
+        global_options=global_options,
         user=user,
         no_chown=no_chown,
         cwd=cwd,
         activate=activate,
         pre_releases=pre_releases,
-        saltenv=__env__
+        cert=cert,
+        allow_all_external=allow_all_external,
+        allow_external=allow_external,
+        allow_unverified=allow_unverified,
+        process_dependency_links=process_dependency_links,
+        saltenv=__env__,
+        env_vars=env_vars,
+        use_vt=use_vt
     )
 
     if pip_install_call and (pip_install_call.get('retcode', 1) == 0):
@@ -391,9 +571,16 @@ def installed(name,
         if requirements or editable:
             comments = []
             if requirements:
+                for eachline in pip_install_call.get('stdout', '').split('\n'):
+                    if not eachline.startswith('Requirement already satisfied') and eachline != 'Cleaning up...':
+                        ret['changes']['requirements'] = True
+                if ret['changes'].get('requirements'):
+                    comments.append('Successfully processed requirements file '
+                                    '{0}.'.format(requirements))
+                else:
+                    comments.append('Requirements was successfully installed')
                 comments.append('Successfully processed requirements file '
                                 '{0}.'.format(requirements))
-                ret['changes']['requirements'] = True
             if editable:
                 comments.append('Package successfully installed from VCS '
                                 'checkout {0}.'.format(editable))
@@ -415,7 +602,7 @@ def installed(name,
                 ret['changes']['{0}==???'.format(name)] = 'Installed'
                 return ret
 
-            version = list(pkg_list.values())[0]
+            version = next(pkg_list.itervalues())
             pkg_name = next(iter(pkg_list))
             ret['changes']['{0}=={1}'.format(pkg_name, version)] = 'Installed'
             ret['comment'] = 'Package was successfully installed'
@@ -455,7 +642,8 @@ def removed(name,
             timeout=None,
             user=None,
             runas=None,
-            cwd=None):
+            cwd=None,
+            use_vt=False):
     '''
     Make sure that a package is not installed.
 
@@ -465,6 +653,8 @@ def removed(name,
         The user under which to run pip
     bin_env : None
         the pip executable or virtualenenv to use
+    use_vt
+        Use VT terminal emulation (see ouptut while installing)
     '''
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
@@ -473,10 +663,9 @@ def removed(name,
         msg = ('The \'runas\' argument to pip.installed is deprecated, and '
                'will be removed in Salt {version}. Please use \'user\' '
                'instead.'.format(
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
 
     # "There can only be one"
@@ -513,11 +702,66 @@ def removed(name,
                                  proxy=proxy,
                                  timeout=timeout,
                                  user=user,
-                                 cwd=cwd):
+                                 cwd=cwd,
+                                 use_vt=use_vt):
         ret['result'] = True
         ret['changes'][name] = 'Removed'
         ret['comment'] = 'Package was successfully removed.'
     else:
         ret['result'] = False
         ret['comment'] = 'Could not remove package.'
+    return ret
+
+
+def uptodate(name,
+             bin_env=None,
+             user=None,
+             runas=None,
+             cwd=None,
+             use_vt=False):
+    '''
+    Verify that the system is completely up to date.
+
+    name
+        The name has no functional value and is only used as a tracking
+        reference
+    user
+        The user under which to run pip
+    bin_env
+        the pip executable or virtualenenv to use
+    use_vt
+        Use VT terminal emulation (see ouptut while installing)
+    '''
+    ret = {'name': name,
+           'changes': {},
+           'result': False,
+           'comment': 'Failed to update.'}
+
+    try:
+        packages = __salt__['pip.list_upgrades'](bin_env=bin_env, user=user,
+                                                 runas=runas, cwd=cwd)
+    except Exception as e:
+        ret['comment'] = str(e)
+        return ret
+
+    if not packages:
+        ret['comment'] = 'System is already up-to-date.'
+        ret['result'] = True
+        return ret
+    elif __opts__['test']:
+        ret['comment'] = 'System update will be performed'
+        ret['result'] = None
+        return ret
+
+    updated = __salt__['pip.upgrade'](bin_env=bin_env, user=user, runas=runas, cwd=cwd, use_vt=use_vt)
+
+    if updated.get('result') is False:
+        ret.update(updated)
+    elif updated:
+        ret['changes'] = updated
+        ret['comment'] = 'Upgrade successful.'
+        ret['result'] = True
+    else:
+        ret['comment'] = 'Upgrade failed.'
+
     return ret

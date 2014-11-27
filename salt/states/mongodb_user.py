@@ -4,14 +4,23 @@ Management of Mongodb users
 ===========================
 '''
 
+# Define the module's virtual name
+__virtualname__ = 'mongodb_user'
+
+
+def __virtual__():
+    if 'mongodb.user_exists' in __salt__:
+        return __virtualname__
+    return False
+
 
 def present(name,
             passwd,
             database="admin",
             user=None,
             password=None,
-            host=None,
-            port=None):
+            host="localhost",
+            port=27017):
     '''
     Ensure that the user is present with the specified properties
 
@@ -19,28 +28,52 @@ def present(name,
         The name of the user to manage
 
     passwd
-        The password of the user
+        The password of the user to manage
 
     user
-        The user to connect as (must be able to create the user)
+        MongoDB user with sufficient privilege to create the user
 
     password
-        The password of the user
+        Password for the admin user specified with the ``user`` parameter
 
     host
-        The host to connect to
+        The hostname/IP address of the MongoDB server
 
     port
-        The port to connect to
+        The port on which MongoDB is listening
 
     database
-        The database to create the user in (if the db doesn't exist, it will be created)
+        The database in which to create the user
+
+        .. note::
+            If the database doesn't exist, it will be created.
+
+    Example:
+
+    .. code-block:: yaml
+
+        mongouser-myapp:
+          mongodb_user.present:
+          - name: myapp
+          - passwd: password-of-myapp
+          # Connect as admin:sekrit
+          - user: admin
+          - password: sekrit
 
     '''
     ret = {'name': name,
            'changes': {},
            'result': True,
            'comment': 'User {0} is already present'.format(name)}
+
+    # Check for valid port
+    try:
+        port = int(port)
+    except TypeError:
+        ret['result'] = False
+        ret['comment'] = 'Port ({0}) is not an integer.'.format(port)
+        return ret
+
     # check if user exists
     if __salt__['mongodb.user_exists'](name, user, password, host, port, database):
         return ret
@@ -74,20 +107,20 @@ def absent(name,
         The name of the user to remove
 
     user
-        The user to connect as (must be able to create the user)
+        MongoDB user with sufficient privilege to create the user
 
     password
-        The password of the user
+        Password for the admin user specified by the ``user`` parameter
 
     host
-        The host to connect to
+        The hostname/IP address of the MongoDB server
 
     port
-        The port to connect to
+        The port on which MongoDB is listening
 
     database
-        The database to create the user in (if the db doesn't exist, it will be created)
-
+        The database from which to remove the user specified by the ``name``
+        parameter
     '''
     ret = {'name': name,
            'changes': {},

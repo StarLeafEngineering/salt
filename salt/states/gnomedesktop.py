@@ -22,8 +22,9 @@ Control the GNOME settings
         gnomedesktop.desktop_interface:
             - user: username
             - clock_show_date: true
-            - clock_show_format: 12h
+            - clock_format: 12h
 '''
+from __future__ import absolute_import
 # Import python libs
 import logging
 import re
@@ -35,8 +36,8 @@ def _check_current_value(gnome_kwargs, value):
     '''
     Check the current value with the passed value
     '''
-    currentValue = __salt__['gnome.get'](**gnome_kwargs)
-    return ((str(currentValue) == str(value)))
+    current_value = __salt__['gnome.get'](**gnome_kwargs)
+    return str(current_value) == str(value)
 
 
 def _do(name, gnome_kwargs, preferences):

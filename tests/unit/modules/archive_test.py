@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2013 by the SaltStack Team, see AUTHORS for more details
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.unit.modules.archive_test
@@ -185,6 +183,38 @@ class ArchiveTestCase(TestCase):
             self.assertEqual(['salt'], ret)
             mock.assert_called_once_with(
                 'unzip /tmp/salt.{{grains.id}}.zip -d /tmp/dest '
+                '-x /tmp/tmpePe8yO /tmp/tmpLeSw1A',
+                template='jinja'
+            )
+
+        mock = MagicMock(return_value='salt')
+        with patch.dict(archive.__salt__, {'cmd.run': mock}):
+            ret = archive.unzip(
+                '/tmp/salt.{{grains.id}}.zip',
+                '/tmp/dest',
+                excludes='/tmp/tmpePe8yO,/tmp/tmpLeSw1A',
+                template='jinja',
+                options='fo'
+            )
+            self.assertEqual(['salt'], ret)
+            mock.assert_called_once_with(
+                'unzip -fo /tmp/salt.{{grains.id}}.zip -d /tmp/dest '
+                '-x /tmp/tmpePe8yO /tmp/tmpLeSw1A',
+                template='jinja',
+            )
+
+        mock = MagicMock(return_value='salt')
+        with patch.dict(archive.__salt__, {'cmd.run': mock}):
+            ret = archive.unzip(
+                '/tmp/salt.{{grains.id}}.zip',
+                '/tmp/dest',
+                excludes=['/tmp/tmpePe8yO', '/tmp/tmpLeSw1A'],
+                template='jinja',
+                options='fo'
+            )
+            self.assertEqual(['salt'], ret)
+            mock.assert_called_once_with(
+                'unzip -fo /tmp/salt.{{grains.id}}.zip -d /tmp/dest '
                 '-x /tmp/tmpePe8yO /tmp/tmpLeSw1A',
                 template='jinja'
             )

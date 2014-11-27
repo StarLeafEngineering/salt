@@ -2,6 +2,7 @@
 '''
 Subversion SCM
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import re
@@ -19,7 +20,7 @@ def __virtual__():
     Only load if svn is installed
     '''
     if utils.which('svn'):
-        return 'svn'
+        return True
     return False
 
 
@@ -62,7 +63,7 @@ def _run_svn(cmd, cwd, user, username, password, opts, **kwargs):
     if username:
         opts += ('--username', username)
     if password:
-        opts += ('--password', password)
+        opts += ('--password', '\'{0}\''.format(password))
     if opts:
         cmd += subprocess.list2cmdline(opts)
 
@@ -179,7 +180,7 @@ def checkout(cwd,
 def switch(cwd, remote, target=None, user=None, username=None,
            password=None, *opts):
     '''
-    .. versionadded:: 2014.1.0 (Hydrogen)
+    .. versionadded:: 2014.1.0
 
     Switch a working copy of a remote Subversion repository
     directory
@@ -203,7 +204,9 @@ def switch(cwd, remote, target=None, user=None, username=None,
     password : None
         Connect to the Subversion server with this password
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' svn.switch /path/to/repo svn://remote/repo
     '''
@@ -441,6 +444,7 @@ def export(cwd,
              user=None,
              username=None,
              password=None,
+             revision='HEAD',
              *opts):
     '''
     Create an unversioned copy of a tree.
@@ -475,4 +479,6 @@ def export(cwd,
     opts += (remote,)
     if target:
         opts += (target,)
+    revision_args = '-r'
+    opts += (revision_args, str(revision),)
     return _run_svn('export', cwd, user, username, password, opts)

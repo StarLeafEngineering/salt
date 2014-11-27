@@ -3,7 +3,7 @@
 Manage RabbitMQ Plugins
 =======================
 
-.. versionadded:: 2014.1.0 (Hydrogen)
+.. versionadded:: 2014.1.0
 
 Example:
 
@@ -13,6 +13,7 @@ Example:
         rabbitmq_plugin:
           - enabled
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -24,10 +25,9 @@ def __virtual__():
     '''
     Only load if RabbitMQ is installed.
     '''
-    name = 'rabbitmq_plugin'
-    if not __salt__['cmd.has_exec']('rabbitmqctl'):
-        name = False
-    return name
+    if __salt__['cmd.has_exec']('rabbitmqctl'):
+        return True
+    return False
 
 
 def enabled(name, runas=None):
@@ -65,7 +65,7 @@ def enabled(name, runas=None):
 
 def disabled(name, runas=None):
     '''
-    Ensure the RabbitMQ plugin is enabled.
+    Ensure the RabbitMQ plugin is disabled.
 
     name
         The name of the plugin

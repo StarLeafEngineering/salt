@@ -9,6 +9,7 @@ will always be executed first, so that any grains loaded here in the core
 module can be overwritten just by returning dict keys with the same value
 as those returned here
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -22,6 +23,7 @@ import locale
 # Extend the default list of supported distros. This will be used for the
 # /etc/DISTRO-release checking that is part of platform.linux_distribution()
 from platform import _supported_dists
+import salt.ext.six as six
 _supported_dists += ('arch', 'mageia', 'meego', 'vmware', 'bluewhite64',
                      'slamd64', 'ovs', 'system', 'mint', 'oracle')
 
@@ -29,6 +31,7 @@ _supported_dists += ('arch', 'mageia', 'meego', 'vmware', 'bluewhite64',
 import salt.log
 import salt.utils
 import salt.utils.network
+from salt.ext.six import string_types
 
 # Solve the Chicken and egg problem where grains need to run before any
 # of the modules are loaded and are generally available for any usage.
@@ -36,9 +39,9 @@ import salt.modules.cmdmod
 
 __salt__ = {
     'cmd.run': salt.modules.cmdmod._run_quiet,
+    'cmd.retcode': salt.modules.cmdmod._retcode_quiet,
     'cmd.run_all': salt.modules.cmdmod._run_all_quiet
 }
-
 log = logging.getLogger(__name__)
 
 HAS_WMI = False
@@ -54,6 +57,8 @@ if salt.utils.is_windows():
             'Unable to import Python wmi module, some core grains '
             'will be missing'
         )
+
+_INTERFACES = {}
 
 
 def _windows_cpudata():
@@ -115,7 +120,7 @@ def _linux_cpudata():
                 #
                 # Hardware        : BCM2708
                 # Revision        : 0002
-                # Serial          : 00000000XXXXXXXX
+                # Serial          : 00000000
                 elif key == 'Processor':
                     grains['cpu_model'] = val.split('-')[0]
                     grains['num_cpus'] = 1
@@ -135,23 +140,23 @@ def _linux_gpu_data():
       - vendor: nvidia|amd|ati|...
         model: string
     '''
+    if __opts__.get('enable_lspci', True) is False:
+        return {}
+
+    if __opts__.get('enable_gpu_grains', True) is False:
+        return {}
+
     lspci = salt.utils.which('lspci')
     if not lspci:
-        log.info(
+        log.debug(
             'The `lspci` binary is not available on the system. GPU grains '
             'will not be available.'
         )
         return {}
 
-    elif __opts__.get('enable_gpu_grains', None) is False:
-        log.info(
-            'Skipping lspci call because enable_gpu_grains was set to False '
-            'in the config. GPU grains will not be available.'
-        )
-        return {}
-
     # dominant gpu vendors to search for (MUST be lowercase for matching below)
     known_vendors = ['nvidia', 'amd', 'ati', 'intel']
+    gpu_classes = ('vga compatible controller', '3d controller')
 
     devs = []
     try:
@@ -166,9 +171,8 @@ def _linux_gpu_data():
         for line in lspci_list:
             # check for record-separating empty lines
             if line == '':
-                if cur_dev.get('Class', '') == 'VGA compatible controller':
+                if cur_dev.get('Class', '').lower() in gpu_classes:
                     devs.append(cur_dev)
-                # XXX; may also need to search for "3D controller"
                 cur_dev = {}
                 continue
             if re.match(r'^\w+:\s+.*', line):
@@ -176,7 +180,7 @@ def _linux_gpu_data():
                 cur_dev[key.strip()] = val.strip()
             else:
                 error = True
-                log.debug('Unexpected lspci output: \'{0}\''.format(line))
+                log.debug('Unexpected lspci output: {0!r}'.format(line))
 
         if error:
             log.warn(
@@ -220,13 +224,13 @@ def _netbsd_gpu_data():
 
         for line in pcictl_out.splitlines():
             for vendor in known_vendors:
-                m = re.match(
+                vendor_match = re.match(
                     r'[0-9:]+ ({0}) (.+) \(VGA .+\)'.format(vendor),
                     line,
                     re.IGNORECASE
                 )
-                if m:
-                    gpus.append({'vendor': m.group(1), 'model': m.group(2)})
+                if vendor_match:
+                    gpus.append({'vendor': vendor_match.group(1), 'model': vendor_match.group(2)})
     except OSError:
         pass
 
@@ -293,15 +297,15 @@ def _bsd_cpudata(osdata):
 
     grains = dict([(k, __salt__['cmd.run'](v)) for k, v in cmds.items()])
 
-    if 'cpu_flags' in grains and isinstance(grains['cpu_flags'], basestring):
+    if 'cpu_flags' in grains and isinstance(grains['cpu_flags'], string_types):
         grains['cpu_flags'] = grains['cpu_flags'].split(' ')
 
     if osdata['kernel'] == 'NetBSD':
         grains['cpu_flags'] = []
         for line in __salt__['cmd.run']('cpuctl identify 0').splitlines():
-            m = re.match(r'cpu[0-9]:\ features[0-9]?\ .+<(.+)>', line)
-            if m:
-                flag = m.group(1).split(',')
+            cpu_match = re.match(r'cpu[0-9]:\ features[0-9]?\ .+<(.+)>', line)
+            if cpu_match:
+                flag = cpu_match.group(1).split(',')
                 grains['cpu_flags'].extend(flag)
 
     if osdata['kernel'] == 'FreeBSD' and os.path.isfile('/var/run/dmesg.boot'):
@@ -399,10 +403,54 @@ def _memdata(osdata):
             wmi_c = wmi.WMI()
             # this is a list of each stick of ram in a system
             # WMI returns it as the string value of the number of bytes
-            tot_bytes = sum(map(lambda x: int(x.Capacity),
-                                wmi_c.Win32_PhysicalMemory()), 0)
+            tot_bytes = sum([int(x.Capacity) for x in wmi_c.Win32_PhysicalMemory()], 0)
             # return memory info in gigabytes
             grains['mem_total'] = int(tot_bytes / (1024 ** 2))
+    return grains
+
+
+def _windows_virtual(osdata):
+    '''
+    Returns what type of virtual hardware is under the hood, kvm or physical
+    '''
+    # Provides:
+    #   virtual
+    #   virtual_subtype
+    grains = dict()
+    if osdata['kernel'] != 'Windows':
+        return grains
+
+    if 'QEMU' in osdata.get('manufacturer', ''):
+        # FIXME: Make this detect between kvm or qemu
+        grains['virtual'] = 'kvm'
+    if 'Bochs' in osdata.get('manufacturer', ''):
+        grains['virtual'] = 'kvm'
+    # Product Name: (oVirt) www.ovirt.org
+    # Red Hat Community virtualization Project based on kvm
+    elif 'oVirt' in osdata.get('productname', ''):
+        grains['virtual'] = 'kvm'
+        grains['virtual_subtype'] = 'oVirt'
+    # Red Hat Enterprise Virtualization
+    elif 'RHEV Hypervisor' in osdata.get('productname', ''):
+        grains['virtual'] = 'kvm'
+        grains['virtual_subtype'] = 'rhev'
+    # Product Name: VirtualBox
+    elif 'VirtualBox' in osdata.get('productname', ''):
+        grains['virtual'] = 'VirtualBox'
+    # Product Name: VMware Virtual Platform
+    elif 'VMware Virtual Platform' in osdata.get('productname', ''):
+        grains['virtual'] = 'VMware'
+    # Manufacturer: Microsoft Corporation
+    # Product Name: Virtual Machine
+    elif 'Microsoft' in osdata.get('manufacturer', '') and \
+         'Virtual Machine' in osdata.get('productname', ''):
+        grains['virtual'] = 'VirtualPC'
+    # Manufacturer: Parallels Software International Inc.
+    elif 'Parallels Software' in osdata.get('manufacturer'):
+        grains['virtual'] = 'Parallels'
+
+    if HAS_WMI:
+        pass
     return grains
 
 
@@ -416,7 +464,26 @@ def _virtual(osdata):
     #   virtual
     #   virtual_subtype
     grains = {'virtual': 'physical'}
-    for command in ('dmidecode', 'lspci', 'dmesg'):
+
+    # Skip the below loop on platforms which have none of the desired cmds
+    # This is a temporary measure until we can write proper virtual hardware
+    # detection.
+    skip_cmds = ('AIX',)
+
+    # Check if enable_lspci is True or False
+    if __opts__.get('enable_lspci', True) is False:
+        _cmds = ('dmidecode', 'dmesg')
+    elif osdata['kernel'] in skip_cmds:
+        _cmds = ()
+    else:
+        # /proc/bus/pci does not exists, lspci will fail
+        if not os.path.exists('/proc/bus/pci'):
+            _cmds = ('dmidecode', 'dmesg')
+        else:
+            _cmds = ('dmidecode', 'lspci', 'dmesg')
+
+    failed_commands = set()
+    for command in _cmds:
         args = []
         if osdata['kernel'] == 'Darwin':
             command = 'system_profiler'
@@ -427,7 +494,7 @@ def _virtual(osdata):
         if not cmd:
             continue
 
-        cmd = '%s %s' % (command, ' '.join(args))
+        cmd = '{0} {1}'.format(command, ' '.join(args))
 
         ret = __salt__['cmd.run_all'](cmd)
 
@@ -435,11 +502,7 @@ def _virtual(osdata):
             if salt.log.is_logging_configured():
                 if salt.utils.is_windows():
                     continue
-                log.warn(
-                    'Although \'{0}\' was found in path, the current user '
-                    'cannot execute it. Grains output might not be '
-                    'accurate.'.format(command)
-                )
+                failed_commands.add(command)
             continue
 
         output = ret['stdout']
@@ -463,12 +526,21 @@ def _virtual(osdata):
             if 'Vendor: QEMU' in output:
                 # FIXME: Make this detect between kvm or qemu
                 grains['virtual'] = 'kvm'
+            if 'Manufacturer: QEMU' in output:
+                grains['virtual'] = 'kvm'
             if 'Vendor: Bochs' in output:
                 grains['virtual'] = 'kvm'
+            if 'BHYVE  BVXSDT' in output:
+                grains['virtual'] = 'bhyve'
             # Product Name: (oVirt) www.ovirt.org
             # Red Hat Community virtualization Project based on kvm
             elif 'Manufacturer: oVirt' in output:
                 grains['virtual'] = 'kvm'
+                grains['virtual_subtype'] = 'ovirt'
+            # Red Hat Enterprise Virtualization
+            elif 'Product Name: RHEV Hypervisor' in output:
+                grains['virtual'] = 'kvm'
+                grains['virtual_subtype'] = 'rhev'
             elif 'VirtualBox' in output:
                 grains['virtual'] = 'VirtualBox'
             # Product Name: VMware Virtual Platform
@@ -489,7 +561,8 @@ def _virtual(osdata):
             model = output.lower()
             if 'vmware' in model:
                 grains['virtual'] = 'VMware'
-            # 00:04.0 System peripheral: InnoTek Systemberatung GmbH VirtualBox Guest Service
+            # 00:04.0 System peripheral: InnoTek Systemberatung GmbH
+            #         VirtualBox Guest Service
             elif 'virtualbox' in model:
                 grains['virtual'] = 'VirtualBox'
             elif 'qemu' in model:
@@ -499,26 +572,59 @@ def _virtual(osdata):
             # Break out of the loop so the next log message is not issued
             break
     else:
-        log.warn(
-            'The tools \'dmidecode\', \'lspci\' and \'dmesg\' failed to execute '
-            'because they do not exist on the system of the user running '
-            'this instance or the user does not have the necessary permissions '
-            'to execute them. Grains output might not be accurate.'
-        )
+        if osdata['kernel'] in skip_cmds:
+            log.warn(
+                'The tools \'dmidecode\', \'lspci\' and \'dmesg\' failed to '
+                'execute because they do not exist on the system of the user '
+                'running this instance or the user does not have the '
+                'necessary permissions to execute them. Grains output might '
+                'not be accurate.'
+            )
 
     choices = ('Linux', 'OpenBSD', 'HP-UX')
     isdir = os.path.isdir
     sysctl = salt.utils.which('sysctl')
     if osdata['kernel'] in choices:
+        if os.path.isdir('/proc'):
+            try:
+                self_root = os.stat('/')
+                init_root = os.stat('/proc/1/root/.')
+                if self_root != init_root:
+                    grains['virtual_subtype'] = 'chroot'
+            except (IOError, OSError):
+                pass
         if os.path.isfile('/proc/1/cgroup'):
-            if ':/lxc/' in salt.utils.fopen('/proc/1/cgroup', 'r').read():
-                grains['virtual_subtype'] = 'LXC'
+            try:
+                if ':/lxc/' in salt.utils.fopen(
+                    '/proc/1/cgroup', 'r'
+                ).read():
+                    grains['virtual_subtype'] = 'LXC'
+                if ':/docker/' in salt.utils.fopen(
+                    '/proc/1/cgroup', 'r'
+                ).read():
+                    grains['virtual_subtype'] = 'Docker'
+            except IOError:
+                pass
         if isdir('/proc/vz'):
             if os.path.isfile('/proc/vz/version'):
                 grains['virtual'] = 'openvzhn'
-            else:
+            elif os.path.isfile('/proc/vz/veinfo'):
                 grains['virtual'] = 'openvzve'
-        elif isdir('/proc/sys/xen') or isdir('/sys/bus/xen') or isdir('/proc/xen'):
+                # a posteriori, it's expected for these to have failed:
+                failed_commands.discard('lspci')
+                failed_commands.discard('dmidecode')
+        # Provide additional detection for OpenVZ
+        if os.path.isfile('/proc/self/status'):
+            with salt.utils.fopen('/proc/self/status') as status_file:
+                vz_re = re.compile(r'^envID:\s+(\d+)$')
+                for line in status_file:
+                    vz_match = vz_re.match(line.rstrip('\n'))
+                    if vz_match and int(vz_match.groups()[0]) != 0:
+                        grains['virtual'] = 'openvzve'
+                    elif vz_match and int(vz_match.groups()[0]) == 0:
+                        grains['virtual'] = 'openvzhn'
+        if isdir('/proc/sys/xen') or \
+                isdir('/sys/bus/xen') or isdir('/proc/xen'):
             if os.path.isfile('/proc/xen/xsd_kva'):
                 # Tested on CentOS 5.3 / 2.6.18-194.26.1.el5xen
                 # Tested on CentOS 5.4 / 2.6.18-164.15.1.el5xen
@@ -527,7 +633,8 @@ def _virtual(osdata):
                 if grains.get('productname', '') == 'HVM domU':
                     # Requires dmidecode!
                     grains['virtual_subtype'] = 'Xen HVM DomU'
-                elif os.path.isfile('/proc/xen/capabilities') and os.access('/proc/xen/capabilities', os.R_OK):
+                elif os.path.isfile('/proc/xen/capabilities') and \
+                        os.access('/proc/xen/capabilities', os.R_OK):
                     caps = salt.utils.fopen('/proc/xen/capabilities')
                     if 'control_d' not in caps.read():
                         # Tested on CentOS 5.5 / 2.6.18-194.3.1.el5xen
@@ -549,21 +656,28 @@ def _virtual(osdata):
             if 'dom' in grains.get('virtual_subtype', '').lower():
                 grains['virtual'] = 'xen'
         if os.path.isfile('/proc/cpuinfo'):
-            if 'QEMU Virtual CPU' in salt.utils.fopen('/proc/cpuinfo', 'r').read():
+            if 'QEMU Virtual CPU' in \
+                    salt.utils.fopen('/proc/cpuinfo', 'r').read():
                 grains['virtual'] = 'kvm'
     elif osdata['kernel'] == 'FreeBSD':
         kenv = salt.utils.which('kenv')
         if kenv:
-            product = __salt__['cmd.run']('{0} smbios.system.product'.format(kenv))
+            product = __salt__['cmd.run'](
+                '{0} smbios.system.product'.format(kenv)
+            )
             maker = __salt__['cmd.run']('{0} smbios.system.maker'.format(kenv))
             if product.startswith('VMware'):
                 grains['virtual'] = 'VMware'
             if maker.startswith('Xen'):
                 grains['virtual_subtype'] = '{0} {1}'.format(maker, product)
                 grains['virtual'] = 'xen'
+            if maker.startswith('Microsoft') and product.startswith('Virtual'):
+                grains['virtual'] = 'VirtualPC'
         if sysctl:
             model = __salt__['cmd.run']('{0} hw.model'.format(sysctl))
-            jail = __salt__['cmd.run']('{0} -n security.jail.jailed'.format(sysctl))
+            jail = __salt__['cmd.run'](
+                '{0} -n security.jail.jailed'.format(sysctl)
+            )
             if jail == '1':
                 grains['virtual_subtype'] = 'jail'
             if 'QEMU Virtual CPU' in model:
@@ -585,7 +699,7 @@ def _virtual(osdata):
             if 'QEMU Virtual CPU' in __salt__['cmd.run'](
                     '{0} -n machdep.cpu_brand'.format(sysctl)):
                 grains['virtual'] = 'kvm'
-            elif not 'invalid' in __salt__['cmd.run'](
+            elif 'invalid' not in __salt__['cmd.run'](
                     '{0} -n machdep.xen.suspend'.format(sysctl)):
                 grains['virtual'] = 'Xen PV DomU'
             elif 'VMware' in __salt__['cmd.run'](
@@ -597,6 +711,12 @@ def _virtual(osdata):
                 if os.path.isfile('/var/run/xenconsoled.pid'):
                     grains['virtual_subtype'] = 'Xen Dom0'
 
+    for command in failed_commands:
+        log.warn(
+            'Although {0!r} was found in path, the current user '
+            'cannot execute it. Grains output might not be '
+            'accurate.'.format(command)
+        )
     return grains
 
 
@@ -613,7 +733,11 @@ def _ps(osdata):
     elif osdata['os'] == 'Windows':
         grains['ps'] = 'tasklist.exe'
     elif osdata.get('virtual', '') == 'openvzhn':
-        grains['ps'] = 'ps -fH -p $(grep -l \"^envID:[[:space:]]*0\\$\" /proc/[0-9]*/status | sed -e \"s=/proc/\\([0-9]*\\)/.*=\\1=\")  | awk \'{ $7=\"\"; print }\''
+        grains['ps'] = (
+            'ps -fH -p $(grep -l \"^envID:[[:space:]]*0\\$\" '
+            '/proc/[0-9]*/status | sed -e \"s=/proc/\\([0-9]*\\)/.*=\\1=\")  '
+            '| awk \'{ $7=\"\"; print }\''
+        )
     elif osdata['os_family'] == 'Debian':
         grains['ps'] = 'ps -efHww'
     else:
@@ -630,9 +754,12 @@ def _windows_platform_data():
     #    manufacturer
     #    productname
     #    biosversion
+    #    serialnumber
     #    osfullname
     #    timezone
     #    windowsdomain
+    #    motherboard.productname
+    #    motherboard.serialnumber
 
     if not HAS_WMI:
         return {}
@@ -647,6 +774,8 @@ def _windows_platform_data():
         biosinfo = wmi_c.Win32_BIOS()[0]
         # http://msdn.microsoft.com/en-us/library/windows/desktop/aa394498(v=vs.85).aspx
         timeinfo = wmi_c.Win32_TimeZone()[0]
+        # http://msdn.microsoft.com/en-us/library/windows/desktop/aa394072(v=vs.85).aspx
+        motherboardinfo = wmi_c.Win32_BaseBoard()[0]
 
         # the name of the OS comes with a bunch of other data about the install
         # location. For example:
@@ -661,9 +790,14 @@ def _windows_platform_data():
             # bios name had a bunch of whitespace appended to it in my testing
             # 'PhoenixBIOS 4.0 Release 6.0     '
             'biosversion': biosinfo.Name.strip(),
+            'serialnumber': biosinfo.SerialNumber,
             'osfullname': osfullname,
             'timezone': timeinfo.Description,
             'windowsdomain': systeminfo.Domain,
+            'motherboard': {
+                'productname': motherboardinfo.Product,
+                'serialnumber': motherboardinfo.SerialNumber
+            }
         }
 
         # test for virtualized environments
@@ -745,6 +879,9 @@ _OS_FAMILY_MAP = {
     'Solaris': 'Solaris',
     'SmartOS': 'Solaris',
     'OpenIndiana Development': 'Solaris',
+    'OpenIndiana': 'Solaris',
+    'OpenSolaris Development': 'Solaris',
+    'OpenSolaris': 'Solaris',
     'Arch ARM': 'Arch',
     'ALT': 'RedHat',
     'Trisquel': 'Debian',
@@ -754,6 +891,26 @@ _OS_FAMILY_MAP = {
     'ScientificLinux': 'RedHat',
     'Raspbian': 'Debian'
 }
+
+
+def _linux_bin_exists(binary):
+    '''
+    Does a binary exist in linux (depends on which)
+    '''
+    return __salt__['cmd.retcode'](
+        'which {0}'.format(binary)
+    ) == 0
+
+
+def _get_interfaces():
+    '''
+    Provide a dict of the connected interfaces and their ip addresses
+    '''
+
+    global _INTERFACES
+    if not _INTERFACES:
+        _INTERFACES = salt.utils.network.interfaces()
+    return _INTERFACES
 
 
 def os_data():
@@ -766,11 +923,17 @@ def os_data():
         }
 
     # Windows Server 2008 64-bit
-    # ('Windows', 'MINIONNAME', '2008ServerR2', '6.1.7601', 'AMD64', 'Intel64 Fam ily 6 Model 23 Stepping 6, GenuineIntel')
+    # ('Windows', 'MINIONNAME', '2008ServerR2', '6.1.7601', 'AMD64',
+    #  'Intel64 Fam ily 6 Model 23 Stepping 6, GenuineIntel')
     # Ubuntu 10.04
-    # ('Linux', 'MINIONNAME', '2.6.32-38-server', '#83-Ubuntu SMP Wed Jan 4 11:26:59 UTC 2012', 'x86_64', '')
+    # ('Linux', 'MINIONNAME', '2.6.32-38-server',
+    # '#83-Ubuntu SMP Wed Jan 4 11:26:59 UTC 2012', 'x86_64', '')
+
+    # pylint: disable=unpacking-non-sequence
     (grains['kernel'], grains['nodename'],
      grains['kernelrelease'], version, grains['cpuarch'], _) = platform.uname()
+    # pylint: enable=unpacking-non-sequence
+
     if salt.utils.is_windows():
         grains['osrelease'] = grains['kernelrelease']
         grains['osversion'] = grains['kernelrelease'] = version
@@ -779,14 +942,35 @@ def os_data():
         grains.update(_memdata(grains))
         grains.update(_windows_platform_data())
         grains.update(_windows_cpudata())
+        grains.update(_windows_virtual(grains))
         grains.update(_ps(grains))
         return grains
     elif salt.utils.is_linux():
+        # Add SELinux grain, if you have it
+        if _linux_bin_exists('selinuxenabled'):
+            grains['selinux'] = {}
+            grains['selinux']['enabled'] = __salt__['cmd.run'](
+                'selinuxenabled; echo $?'
+            ).strip() == '0'
+            if _linux_bin_exists('getenforce'):
+                grains['selinux']['enforced'] = __salt__['cmd.run'](
+                    'getenforce'
+                ).strip()
+
+        # Add systemd grain, if you have it
+        if _linux_bin_exists('systemctl') and _linux_bin_exists('localectl'):
+            grains['systemd'] = {}
+            systemd_info = __salt__['cmd.run'](
+                'systemctl --version'
+            ).splitlines()
+            grains['systemd']['version'] = systemd_info[0].split()[1]
+            grains['systemd']['features'] = systemd_info[1]
+
         # Add lsb grains on any distro with lsb-release
         try:
             import lsb_release
             release = lsb_release.get_distro_information()
-            for key, value in release.iteritems():
+            for key, value in six.iteritems(release):
                 key = key.lower()
                 lsb_param = 'lsb_{0}{1}'.format(
                     '' if key.startswith('distrib_') else 'distrib_',
@@ -796,20 +980,26 @@ def os_data():
         except ImportError:
             # if the python library isn't available, default to regex
             if os.path.isfile('/etc/lsb-release'):
+                # Matches any possible format:
+                #     DISTRIB_ID="Ubuntu"
+                #     DISTRIB_ID='Mageia'
+                #     DISTRIB_ID=Fedora
+                #     DISTRIB_RELEASE='10.10'
+                #     DISTRIB_CODENAME='squeeze'
+                #     DISTRIB_DESCRIPTION='Ubuntu 10.10'
+                regex = re.compile((
+                    '^(DISTRIB_(?:ID|RELEASE|CODENAME|DESCRIPTION))=(?:\'|")?'
+                    '([\\w\\s\\.-_]+)(?:\'|")?'
+                ))
                 with salt.utils.fopen('/etc/lsb-release') as ifile:
                     for line in ifile:
-                        # Matches any possible format:
-                        #     DISTRIB_ID="Ubuntu"
-                        #     DISTRIB_ID='Mageia'
-                        #     DISTRIB_ID=Fedora
-                        #     DISTRIB_RELEASE='10.10'
-                        #     DISTRIB_CODENAME='squeeze'
-                        #     DISTRIB_DESCRIPTION='Ubuntu 10.10'
-                        regex = re.compile('^(DISTRIB_(?:ID|RELEASE|CODENAME|DESCRIPTION))=(?:\'|")?([\\w\\s\\.-_]+)(?:\'|")?')
                         match = regex.match(line.rstrip('\n'))
                         if match:
-                            # Adds: lsb_distrib_{id,release,codename,description}
-                            grains['lsb_{0}'.format(match.groups()[0].lower())] = match.groups()[1].rstrip()
+                            # Adds:
+                            #   lsb_distrib_{id,release,codename,description}
+                            grains[
+                                'lsb_{0}'.format(match.groups()[0].lower())
+                            ] = match.groups()[1].rstrip()
             elif os.path.isfile('/etc/os-release'):
                 # Arch ARM Linux
                 with salt.utils.fopen('/etc/os-release') as ifile:
@@ -822,8 +1012,11 @@ def os_data():
                         # ANSI_COLOR="0;36"
                         # HOME_URL="http://archlinuxarm.org/"
                         # SUPPORT_URL="https://archlinuxarm.org/forum"
-                        # BUG_REPORT_URL="https://github.com/archlinuxarm/PKGBUILDs/issues"
-                        regex = re.compile('^([\\w]+)=(?:\'|")?([\\w\\s\\.-_]+)(?:\'|")?')
+                        # BUG_REPORT_URL=
+                        #   "https://github.com/archlinuxarm/PKGBUILDs/issues"
+                        regex = re.compile(
+                            '^([\\w]+)=(?:\'|")?([\\w\\s\\.-_]+)(?:\'|")?'
+                        )
                         match = regex.match(line.rstrip('\n'))
                         if match:
                             name, value = match.groups()
@@ -903,16 +1096,20 @@ def os_data():
             with salt.utils.fopen('/etc/release', 'r') as fp_:
                 rel_data = fp_.read()
                 try:
-                    release_re = r'(Solaris|OpenIndiana(?: Development)?)' \
-                                 r'\s+(\d+ \d+\/\d+|oi_\S+)?'
-                    osname, osrelease = re.search(release_re,
-                                                  rel_data).groups()
+                    release_re = re.compile(
+                        r'((?:Open)?Solaris|OpenIndiana) (Development)?'
+                        r'\s*(\d+ \d+\/\d+|oi_\S+|snv_\S+)?'
+                    )
+                    osname, development, osrelease = \
+                        release_re.search(rel_data).groups()
                 except AttributeError:
                     # Set a blank osrelease grain and fallback to 'Solaris'
                     # as the 'os' grain.
                     grains['os'] = grains['osfullname'] = 'Solaris'
                     grains['osrelease'] = ''
                 else:
+                    if development is not None:
+                        osname = ' '.join((osname, development))
                     grains['os'] = grains['osfullname'] = osname
                     grains['osrelease'] = osrelease
 
@@ -946,6 +1143,8 @@ def os_data():
     # architecture.
     if grains.get('os_family') == 'Debian':
         osarch = __salt__['cmd.run']('dpkg --print-architecture').strip()
+    elif grains.get('os') == 'Fedora':
+        osarch = __salt__['cmd.run']('rpm --eval %{_host_cpu}').strip()
     else:
         osarch = grains['cpuarch']
     grains['osarch'] = osarch
@@ -961,7 +1160,7 @@ def os_data():
 
     # Load additional OS family grains
     if grains['os_family'] == "RedHat":
-        grains['osmajorrelease'] = grains['osrelease'].split('.', 1)
+        grains['osmajorrelease'] = grains['osrelease'].split('.', 1)[0]
 
         grains['osfinger'] = '{os}-{ver}'.format(
             os=grains['osfullname'],
@@ -970,6 +1169,20 @@ def os_data():
         grains['osfinger'] = '{os}-{ver}'.format(
             os=grains['osfullname'],
             ver=grains['osrelease'])
+    elif grains.get('osfullname') == "Debian":
+        grains['osmajorrelease'] = grains['osrelease'].split('.', 1)[0]
+
+        grains['osfinger'] = '{os}-{ver}'.format(
+            os=grains['osfullname'],
+            ver=grains['osrelease'].partition('.')[0])
+
+    if grains.get('osrelease', ''):
+        osrelease_info = grains['osrelease'].split('.')
+        for idx, value in enumerate(osrelease_info):
+            if not value.isdigit():
+                continue
+            osrelease_info[idx] = int(value)
+        grains['osrelease_info'] = tuple(osrelease_info)
 
     return grains
 
@@ -981,13 +1194,21 @@ def locale_info():
         defaultencoding
     '''
     grains = {}
+    grains['locale_info'] = {}
+
+    if 'proxyminion' in __opts__:
+        return grains
+
     try:
-        (grains['defaultlanguage'], grains['defaultencoding']) = locale.getdefaultlocale()
+        (
+            grains['locale_info']['defaultlanguage'],
+            grains['locale_info']['defaultencoding']
+        ) = locale.getdefaultlocale()
     except Exception:
         # locale.getdefaultlocale can ValueError!! Catch anything else it
         # might do, per #2205
-        grains['defaultlanguage'] = 'unknown'
-        grains['defaultencoding'] = 'unknown'
+        grains['locale_info']['defaultlanguage'] = 'unknown'
+        grains['locale_info']['defaultencoding'] = 'unknown'
     return grains
 
 
@@ -1002,11 +1223,12 @@ def hostname():
     #   localhost
     #   domain
     grains = {}
+
+    if 'proxyminion' in __opts__:
+        return grains
+
     grains['localhost'] = socket.gethostname()
-    if '.' in socket.getfqdn():
-        grains['fqdn'] = socket.getfqdn()
-    else:
-        grains['fqdn'] = grains['localhost']
+    grains['fqdn'] = salt.utils.network.get_fqhostname()
     (grains['host'], grains['domain']) = grains['fqdn'].partition('.')[::2]
     return grains
 
@@ -1015,7 +1237,12 @@ def append_domain():
     '''
     Return append_domain if set
     '''
+
     grain = {}
+
+    if 'proxyminion' in __opts__:
+        return grain
+
     if 'append_domain' in __opts__:
         grain['append_domain'] = __opts__['append_domain']
     return grain
@@ -1025,6 +1252,10 @@ def ip4():
     '''
     Return a list of ipv4 addrs
     '''
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     return {'ipv4': salt.utils.network.ip_addrs(include_loopback=True)}
 
 
@@ -1032,6 +1263,10 @@ def fqdn_ip4():
     '''
     Return a list of ipv4 addrs of fqdn
     '''
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     try:
         info = socket.getaddrinfo(hostname()['fqdn'], None, socket.AF_INET)
         addrs = list(set(item[4][0] for item in info))
@@ -1044,6 +1279,10 @@ def ip6():
     '''
     Return a list of ipv6 addrs
     '''
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     return {'ipv6': salt.utils.network.ip_addrs6(include_loopback=True)}
 
 
@@ -1051,6 +1290,10 @@ def fqdn_ip6():
     '''
     Return a list of ipv6 addrs of fqdn
     '''
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     try:
         info = socket.getaddrinfo(hostname()['fqdn'], None, socket.AF_INET6)
         addrs = list(set(item[4][0] for item in info))
@@ -1065,11 +1308,18 @@ def ip_interfaces():
     '''
     # Provides:
     #   ip_interfaces
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     ret = {}
-    ifaces = salt.utils.network.interfaces()
+    ifaces = _get_interfaces()
     for face in ifaces:
         iface_ips = []
         for inet in ifaces[face].get('inet', []):
+            if 'address' in inet:
+                iface_ips.append(inet['address'])
+        for inet in ifaces[face].get('inet6', []):
             if 'address' in inet:
                 iface_ips.append(inet['address'])
         for secondary in ifaces[face].get('secondary', []):
@@ -1079,18 +1329,82 @@ def ip_interfaces():
     return {'ip_interfaces': ret}
 
 
+def ip4_interfaces():
+    '''
+    Provide a dict of the connected interfaces and their ip4 addresses
+    '''
+    # Provides:
+    #   ip_interfaces
+
+    if 'proxyminion' in __opts__:
+        return {}
+
+    ret = {}
+    ifaces = _get_interfaces()
+    for face in ifaces:
+        iface_ips = []
+        for inet in ifaces[face].get('inet', []):
+            if 'address' in inet:
+                iface_ips.append(inet['address'])
+        for secondary in ifaces[face].get('secondary', []):
+            if 'address' in secondary:
+                iface_ips.append(secondary['address'])
+        ret[face] = iface_ips
+    return {'ip4_interfaces': ret}
+
+
+def ip6_interfaces():
+    '''
+    Provide a dict of the connected interfaces and their ip6 addresses
+    '''
+    # Provides:
+    #   ip_interfaces
+
+    if 'proxyminion' in __opts__:
+        return {}
+
+    ret = {}
+    ifaces = _get_interfaces()
+    for face in ifaces:
+        iface_ips = []
+        for inet in ifaces[face].get('inet6', []):
+            if 'address' in inet:
+                iface_ips.append(inet['address'])
+        for secondary in ifaces[face].get('secondary', []):
+            if 'address' in secondary:
+                iface_ips.append(secondary['address'])
+        ret[face] = iface_ips
+    return {'ip6_interfaces': ret}
+
+
 def hwaddr_interfaces():
     '''
-    Provide a dict of the connected interfaces and their hw addresses (Mac Address)
+    Provide a dict of the connected interfaces and their
+    hw addresses (Mac Address)
     '''
     # Provides:
     #   hwaddr_interfaces
     ret = {}
-    ifaces = salt.utils.network.interfaces()
+    ifaces = _get_interfaces()
     for face in ifaces:
         if 'hwaddr' in ifaces[face]:
             ret[face] = ifaces[face]['hwaddr']
     return {'hwaddr_interfaces': ret}
+
+
+def get_machine_id():
+    '''
+    Provide the machine-id
+    '''
+    # Provides:
+    #   machine-id
+    locations = ['/etc/machine-id', '/var/lib/dbus/machine-id']
+    existing_locations = [loc for loc in locations if os.path.exists(loc)]
+    if not existing_locations:
+        return {}
+    else:
+        with salt.utils.fopen(existing_locations[0]) as machineid:
+            return {'machine_id': machineid.read().strip()}
 
 
 def path():
@@ -1120,6 +1434,15 @@ def pythonpath():
     return {'pythonpath': sys.path}
 
 
+def pythonexecutable():
+    '''
+    Return the python executable in use
+    '''
+    # Provides:
+    #   pythonexecutable
+    return {'pythonexecutable': sys.executable}
+
+
 def saltpath():
     '''
     Return the path of the salt module
@@ -1138,6 +1461,19 @@ def saltversion():
     #   saltversion
     from salt.version import __version__
     return {'saltversion': __version__}
+
+
+def zmqversion():
+    '''
+    Return the zeromq version
+    '''
+    # Provides:
+    #   zmqversion
+    try:
+        import zmq
+        return {'zmqversion': zmq.zmq_version()}
+    except ImportError:
+        return {}
 
 
 def saltversioninfo():
@@ -1162,12 +1498,19 @@ def _dmidecode_data(regex_dict):
     '''
     ret = {}
 
+    if 'proxyminion' in __opts__:
+        return {}
+
     # No use running if dmidecode/smbios isn't in the path
     if salt.utils.which('dmidecode'):
         out = __salt__['cmd.run']('dmidecode')
     elif salt.utils.which('smbios'):
         out = __salt__['cmd.run']('smbios')
     else:
+        log.debug(
+            'The `dmidecode` binary is not available on the system. GPU '
+            'grains will not be available.'
+        )
         return ret
 
     for section in regex_dict:
@@ -1217,6 +1560,10 @@ def _hw_data(osdata):
 
     .. versionadded:: 0.9.5
     '''
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     grains = {}
     # TODO: *BSD dmidecode output
     if osdata['kernel'] == 'Linux':
@@ -1245,7 +1592,8 @@ def _hw_data(osdata):
             },
         }
         grains.update(_dmidecode_data(sunos_dmi_regex))
-    # On FreeBSD /bin/kenv (already in base system) can be used instead of dmidecode
+    # On FreeBSD /bin/kenv (already in base system)
+    # can be used instead of dmidecode
     elif osdata['kernel'] == 'FreeBSD':
         kenv = salt.utils.which('kenv')
         if kenv:
@@ -1293,10 +1641,20 @@ def _smartos_zone_data():
     # Provides:
     #   pkgsrcversion
     #   imageversion
+    #   pkgsrcpath
+    #   zonename
+    #   zoneid
+    #   hypervisor_uuid
+    #   datacenter
+
+    if 'proxyminion' in __opts__:
+        return {}
+
     grains = {}
 
     pkgsrcversion = re.compile('^release:\\s(.+)')
     imageversion = re.compile('Image:\\s(.+)')
+    pkgsrcpath = re.compile('PKG_PATH=(.+)')
     if os.path.isfile('/etc/pkgsrc_version'):
         with salt.utils.fopen('/etc/pkgsrc_version', 'r') as fp_:
             for line in fp_:
@@ -1309,10 +1667,25 @@ def _smartos_zone_data():
                 match = imageversion.match(line)
                 if match:
                     grains['imageversion'] = match.group(1)
+    if os.path.isfile('/opt/local/etc/pkg_install.conf'):
+        with salt.utils.fopen('/opt/local/etc/pkg_install.conf', 'r') as fp_:
+            for line in fp_:
+                match = pkgsrcpath.match(line)
+                if match:
+                    grains['pkgsrcpath'] = match.group(1)
     if 'pkgsrcversion' not in grains:
         grains['pkgsrcversion'] = 'Unknown'
     if 'imageversion' not in grains:
         grains['imageversion'] = 'Unknown'
+    if 'pkgsrcpath' not in grains:
+        grains['pkgsrcpath'] = 'Unknown'
+
+    grains['zonename'] = __salt__['cmd.run']('zonename')
+    grains['zoneid'] = __salt__['cmd.run']('zoneadm list -p | awk -F: \'{ print $1 }\'')
+    grains['hypervisor_uuid'] = __salt__['cmd.run']('mdata-get sdc:server_uuid')
+    grains['datacenter'] = __salt__['cmd.run']('mdata-get sdc:datacenter_name')
+    if "FAILURE" in grains['datacenter'] or "No metadata" in grains['datacenter']:
+        grains['datacenter'] = "Unknown"
 
     return grains
 
@@ -1320,10 +1693,14 @@ def _smartos_zone_data():
 def get_server_id():
     '''
     Provides an integer based on the FQDN of a machine.
-    Useful as server-id in MySQL replication or anywhere else you'll need an ID like this.
+    Useful as server-id in MySQL replication or anywhere else you'll need an ID
+    like this.
     '''
     # Provides:
     #   server_id
+
+    if 'proxyminion' in __opts__:
+        return {}
     return {'server_id': abs(hash(__opts__.get('id', '')) % (2 ** 31))}
 
 

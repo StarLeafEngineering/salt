@@ -2,6 +2,7 @@
 '''
 Control a salt cloud system
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import json
@@ -10,7 +11,7 @@ import json
 import salt.utils
 HAS_CLOUD = False
 try:
-    import saltcloud
+    import saltcloud  # pylint: disable=W0611
     HAS_CLOUD = True
 except ImportError:
     pass

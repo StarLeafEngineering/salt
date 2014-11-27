@@ -8,6 +8,7 @@ Modify, retrieve, or delete values from OpenStack configuration files.
 :platform: linux
 
 '''
+from __future__ import absolute_import
 # Import Salt libs
 import salt.utils
 import salt.exceptions
@@ -15,10 +16,15 @@ import salt.exceptions
 from salt.utils.decorators import which as _which
 
 import shlex
-import pipes
+try:
+    import pipes
+    HAS_DEPS = True
+except ImportError:
+    HAS_DEPS = False
+
 if hasattr(shlex, 'quote'):
     _quote = shlex.quote
-elif hasattr(pipes, 'quote'):
+elif HAS_DEPS and hasattr(pipes, 'quote'):
     _quote = pipes.quote
 else:
     _quote = None
@@ -30,9 +36,9 @@ __func_alias__ = {
 
 
 def __virtual__():
-    if _quote is None:
+    if _quote is None and not HAS_DEPS:
         return False
-    return 'openstack_config'
+    return True
 
 
 def _fallback(*args, **kw):

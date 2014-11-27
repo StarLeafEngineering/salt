@@ -2,6 +2,7 @@
 '''
 Support for Layman
 '''
+from __future__ import absolute_import
 
 import salt.utils
 
@@ -30,7 +31,7 @@ def _get_makeconf():
 
 def add(overlay):
     '''
-    Add the given overlay from the caced remote list to your locally
+    Add the given overlay from the cached remote list to your locally
     installed overlays. Specify 'ALL' to add all overlays from the
     remote list.
 

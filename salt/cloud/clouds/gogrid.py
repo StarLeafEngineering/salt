@@ -8,6 +8,8 @@ service. To use Salt Cloud with GoGrid log into the GoGrid web interface and
 create an api key. Do this by clicking on "My Account" and then going to the
 API Keys tab.
 
+:depends: libcloud >= 0.13.2
+
 Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
 ``/etc/salt/cloud.providers.d/gogrid.conf``:
 
@@ -22,6 +24,7 @@ Set up the cloud configuration at ``/etc/salt/cloud.providers`` or
       provider: gogrid
 
 '''
+from __future__ import absolute_import
 
 # The import section is mostly libcloud boilerplate
 
@@ -36,7 +39,7 @@ from salt.cloud.libcloudfuncs import *   # pylint: disable=W0614,W0401
 # Import salt cloud libs
 import salt.config as config
 from salt.utils import namespaced_function
-from salt.cloud.exceptions import SaltCloudSystemExit
+from salt.exceptions import SaltCloudSystemExit
 
 # Get logging started
 log = logging.getLogger(__name__)
@@ -62,13 +65,8 @@ def __virtual__():
     Set up the libcloud functions and check for GOGRID configs
     '''
     if get_configured_provider() is False:
-        log.debug(
-            'There is no GoGrid cloud provider configuration available. Not '
-            'loading module.'
-        )
         return False
 
-    log.debug('Loading GoGrid cloud module')
     return True
 
 
@@ -119,6 +117,7 @@ def create(vm_):
             'profile': vm_['profile'],
             'provider': vm_['provider'],
         },
+        transport=__opts__['transport']
     )
 
     log.info('Creating Cloud VM {0}'.format(vm_['name']))
@@ -136,6 +135,7 @@ def create(vm_):
         {'kwargs': {'name': kwargs['name'],
                     'image': kwargs['image'].name,
                     'size': kwargs['size'].name}},
+        transport=__opts__['transport']
     )
 
     try:
@@ -148,7 +148,7 @@ def create(vm_):
                 vm_['name']
             ),
             # Show the traceback if the debug logging level is enabled
-            exc_info=log.isEnabledFor(logging.DEBUG)
+            exc_info_on_loglevel=logging.DEBUG
         )
         return False
 
@@ -160,6 +160,7 @@ def create(vm_):
     if config.get_cloud_config_value('deploy', vm_, __opts__) is True:
         deploy_script = script(vm_)
         deploy_kwargs = {
+            'opts': __opts__,
             'host': data.public_ips[0],
             'username': ssh_username,
             'password': data.extra['password'],
@@ -241,6 +242,7 @@ def create(vm_):
             'executing deploy script',
             'salt/cloud/{0}/deploying'.format(vm_['name']),
             {'kwargs': event_kwargs},
+            transport=__opts__['transport']
         )
 
         deployed = False
@@ -258,13 +260,17 @@ def create(vm_):
                 )
             )
 
+    ret.update(data)
+
+    if 'password' in data.extra:
+        del data.extra['password']
+
     log.info('Created Cloud VM {0[name]!r}'.format(vm_))
     log.debug(
         '{0[name]!r} VM creation details:\n{1}'.format(
             vm_, pprint.pformat(data.__dict__)
         )
     )
-    ret.update(data.__dict__)
 
     salt.utils.cloud.fire_event(
         'event',
@@ -275,6 +281,7 @@ def create(vm_):
             'profile': vm_['profile'],
             'provider': vm_['provider'],
         },
+        transport=__opts__['transport']
     )
 
     return ret

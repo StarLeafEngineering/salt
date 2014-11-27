@@ -2,6 +2,7 @@
 '''
 Module for gathering and managing network information
 '''
+from __future__ import absolute_import
 
 # Import salt libs
 import salt.utils
@@ -14,7 +15,7 @@ except ImportError:
 
 # Import 3rd party libraries
 try:
-    import wmi
+    import wmi  # pylint: disable=W0611
 except ImportError:
     HAS_DEPENDENCIES = False
 
@@ -56,7 +57,7 @@ def netstat():
         salt '*' network.netstat
     '''
     ret = []
-    cmd = 'netstat -na'
+    cmd = 'netstat -nao'
     lines = __salt__['cmd.run'](cmd).splitlines()
     for line in lines:
         comps = line.split()
@@ -65,13 +66,15 @@ def netstat():
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': comps[3]})
+                'state': comps[3],
+                'program': comps[4]})
         if line.startswith('  UDP'):
             ret.append({
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': None})
+                'state': None,
+                'program': comps[3]})
     return ret
 
 
@@ -89,7 +92,7 @@ def traceroute(host):
     cmd = 'tracert {0}'.format(salt.utils.network.sanitize_host(host))
     lines = __salt__['cmd.run'](cmd).splitlines()
     for line in lines:
-        if not ' ' in line:
+        if ' ' not in line:
             continue
         if line.startswith('Trac'):
             continue
@@ -176,6 +179,25 @@ def dig(host):
     '''
     cmd = 'dig {0}'.format(salt.utils.network.sanitize_host(host))
     return __salt__['cmd.run'](cmd)
+
+
+def interfaces_names():
+    '''
+    Return a list of all the interfaces names
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' network.interfaces_names
+    '''
+
+    ret = []
+    with salt.utils.winapi.Com():
+        c = wmi.WMI()
+        for iface in c.Win32_NetworkAdapter(NetEnabled=True):
+            ret.append(iface.NetConnectionID)
+    return ret
 
 
 def interfaces():

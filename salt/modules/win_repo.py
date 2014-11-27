@@ -11,17 +11,22 @@ Place all Windows package files in the 'win_repo' directory.
 '''
 
 # Import python libs
+from __future__ import absolute_import
+from __future__ import print_function
 import os
 
 # Import third party libs
 import yaml
-import msgpack
+try:
+    import msgpack
+except ImportError:
+    import msgpack_pure as msgpack
 
 # Import salt libs
 import salt.output
 import salt.utils
 import logging
-from salt._compat import string_types
+from salt.ext.six import string_types
 
 log = logging.getLogger(__name__)
 
@@ -65,18 +70,18 @@ def genrepo():
                         # when log.debug works
                         log.debug('Failed to compile'
                                   '{0}: {1}'.format(os.path.join(root, name), exc))
-                        print 'Failed to compile {0}: {1}'.format(os.path.join(root, name), exc)
+                        print('Failed to compile {0}: {1}'.format(os.path.join(root, name), exc))
                 if config:
                     revmap = {}
-                    for pkgname, versions in config.iteritems():
-                        for version, repodata in versions.iteritems():
+                    for pkgname, versions in config.items():
+                        for version, repodata in versions.items():
                             if not isinstance(version, string_types):
                                 config[pkgname][str(version)] = \
                                     config[pkgname].pop(version)
                             revmap[repodata['full_name']] = pkgname
                     ret.setdefault('repo', {}).update(config)
                     ret.setdefault('name_map', {}).update(revmap)
-    with salt.utils.fopen(os.path.join(repo, winrepo), 'w') as repo:
+    with salt.utils.fopen(os.path.join(repo, winrepo), 'w+b') as repo:
         repo.write(msgpack.dumps(ret))
     salt.output.display_output(ret, 'pprint', __opts__)
     return ret
@@ -102,9 +107,14 @@ def update_git_repos():
         #else:
             #targetname = gitrepo
         targetname = gitrepo
+        rev = None
+        # If a revision is specified, use it.
+        if len(gitrepo.strip().split(' ')) > 1:
+            rev, gitrepo = gitrepo.strip().split(' ')
         gittarget = os.path.join(repo, targetname)
         #result = mminion.states['git.latest'](gitrepo,
         result = __salt__['git.latest'](gitrepo,
+                                        rev=rev,
                                         target=gittarget,
                                         force=True)
         ret[result['name']] = result['result']

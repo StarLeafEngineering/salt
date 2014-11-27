@@ -26,7 +26,7 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         '''
         test salt-key -l for accepted arguments
         '''
-        for key in ('acc', 'pre', 'un', 'rej'):
+        for key in ('acc', 'pre', 'den', 'un', 'rej'):
             # These should not trigger any error
             data = self.run_key('-l {0}'.format(key), catch_stderr=True)
             self.assertNotIn('error:', '\n'.join(data[1]))
@@ -38,13 +38,25 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         test salt-key -L
         '''
         data = self.run_key('-L')
-        expect = [
-            'Accepted Keys:',
-            'minion',
-            'sub_minion',
-            'Unaccepted Keys:',
-            'Rejected Keys:'
-        ]
+        expect = None
+        if self.master_opts['transport'] == 'zeromq':
+            expect = [
+                'Accepted Keys:',
+                'minion',
+                'sub_minion',
+                'Denied Keys:',
+                'Unaccepted Keys:',
+                'Rejected Keys:'
+            ]
+        elif self.master_opts['transport'] == 'raet':
+            expect = [
+                'Accepted Keys:',
+                'master',
+                'minion',
+                'sub_minion',
+                'Unaccepted Keys:',
+                'Rejected Keys:'
+            ]
         self.assertEqual(data, expect)
 
     def test_list_json_out(self):
@@ -52,17 +64,31 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         test salt-key -L --json-out
         '''
         data = self.run_key('-L --out json')
-
-        expect = [
-            '{',
-            '    "minions_rejected": [], ',
-            '    "minions_pre": [], ',
-            '    "minions": [',
-            '        "minion", ',
-            '        "sub_minion"',
-            '    ]',
-            '}',
-        ]
+        expect = None
+        if self.master_opts['transport'] == 'zeromq':
+            expect = [
+                '{',
+                '    "minions_rejected": [], ',
+                '    "minions_denied": [], ',
+                '    "minions_pre": [], ',
+                '    "minions": [',
+                '        "minion", ',
+                '        "sub_minion"',
+                '    ]',
+                '}',
+            ]
+        elif self.master_opts['transport'] == 'raet':
+            expect = [
+                '{',
+                '    "accepted": [',
+                '        "master", ',
+                '        "minion", ',
+                '        "sub_minion"',
+                '    ], ',
+                '    "rejected": [], ',
+                '    "pending": []',
+                '}'
+            ]
         self.assertEqual(data, expect)
 
     def test_list_yaml_out(self):
@@ -70,14 +96,25 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         test salt-key -L --yaml-out
         '''
         data = self.run_key('-L --out yaml')
-
-        expect = [
-            'minions:',
-            '- minion',
-            '- sub_minion',
-            'minions_pre: []',
-            'minions_rejected: []',
-        ]
+        expect = []
+        if self.master_opts['transport'] == 'zeromq':
+            expect = [
+                'minions:',
+                '- minion',
+                '- sub_minion',
+                'minions_denied: []',
+                'minions_pre: []',
+                'minions_rejected: []',
+            ]
+        elif self.master_opts['transport'] == 'raet':
+            expect = [
+                'accepted:',
+                '- master',
+                '- minion',
+                '- sub_minion',
+                'pending: []',
+                'rejected: []'
+            ]
         self.assertEqual(data, expect)
 
     def test_list_raw_out(self):
@@ -85,11 +122,19 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         test salt-key -L --raw-out
         '''
         data = self.run_key('-L --out raw')
-
-        expect = [
-            "{'minions_rejected': [], 'minions_pre': [], "
-            "'minions': ['minion', 'sub_minion']}"
-        ]
+        expect = None
+        if self.master_opts['transport'] == 'zeromq':
+            expect = [
+                "{'minions_rejected': [], 'minions_denied': [], 'minions_pre': [], "
+                "'minions': ['minion', 'sub_minion']}"
+            ]
+        elif self.master_opts['transport'] == 'raet':
+            expected_txt = (
+                '{\'accepted\': '
+                '[\'master\', \'minion\', \'sub_minion\'], '
+                '\'rejected\': [], \'pending\': []}'
+            )
+            expect = [expected_txt]
         self.assertEqual(data, expect)
 
     def test_list_acc(self):
@@ -97,19 +142,35 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         test salt-key -l
         '''
         data = self.run_key('-l acc')
-        self.assertEqual(
-            data,
-            ['Accepted Keys:', 'minion', 'sub_minion']
-        )
+        if self.master_opts['transport'] == 'zeromq':
+            self.assertEqual(
+                data,
+                ['Accepted Keys:', 'minion', 'sub_minion']
+            )
+        elif self.master_opts['transport'] == 'raet':
+            self.assertEqual(
+                data,
+                [
+                    'minions:',
+                    '    - master',
+                    '    - minion',
+                    '    - sub_minion'
+                ]
+            )
 
     def test_list_un(self):
         '''
         test salt-key -l
         '''
         data = self.run_key('-l un')
+        expect = None
+        if self.master_opts['transport'] == 'zeromq':
+            expect = ['Unaccepted Keys:']
+        elif self.master_opts['transport'] == 'raet':
+            expect = ['minions_pre:']
         self.assertEqual(
             data,
-            ['Unaccepted Keys:']
+            expect
         )
 
     def test_keys_generation(self):
@@ -117,7 +178,12 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         arg_str = '--gen-keys minibar --gen-keys-dir {0}'.format(tempdir)
         self.run_key(arg_str)
         try:
-            for fname in ('minibar.pub', 'minibar.pem'):
+            key_names = None
+            if self.master_opts['transport'] == 'zeromq':
+                key_names = ('minibar.pub', 'minibar.pem')
+            elif self.master_opts['transport'] == 'raet':
+                key_names = ('minibar.key',)
+            for fname in key_names:
                 self.assertTrue(os.path.isfile(os.path.join(tempdir, fname)))
         finally:
             shutil.rmtree(tempdir)
@@ -128,7 +194,12 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         arg_str = '--gen-keys minibar --gen-keys-dir {0}'.format(tempdir)
         self.run_script('salt-key', arg_str)
         try:
-            for fname in ('minibar.pub', 'minibar.pem'):
+            key_names = None
+            if self.master_opts['transport'] == 'zeromq':
+                key_names = ('minibar.pub', 'minibar.pem')
+            elif self.master_opts['transport'] == 'raet':
+                key_names = ('minibar.key',)
+            for fname in key_names:
                 self.assertTrue(os.path.isfile(os.path.join(tempdir, fname)))
         finally:
             shutil.rmtree(tempdir)

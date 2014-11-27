@@ -13,6 +13,7 @@ so it can be used to maintain services using the ``provider`` argument:
         - running
         - provider: daemontools
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import os
@@ -184,7 +185,7 @@ def missing(name):
 
         salt '*' daemontools.missing foo
     '''
-    return not name in get_all()
+    return name not in get_all()
 
 
 def get_all():

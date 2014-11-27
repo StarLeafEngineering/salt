@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2013 by the SaltStack Team, see AUTHORS for more details
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.unit.states.pip_test
@@ -55,7 +53,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
                 ret = pip_state.installed('pep8', runas='me!')
                 self.assertEqual(
                     'The \'runas\' argument to pip.installed is deprecated, '
-                    'and will be removed in Salt Hydrogen (Unreleased). '
+                    'and will be removed in Salt Lithium (Unreleased). '
                     'Please use \'user\' instead.', str(w[-1].message)
                 )
                 self.assertSaltTrueReturn({'testsuite': ret})
@@ -63,7 +61,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
                 # message?
                 self.assertInSalStatetWarning(
                     'The \'runas\' argument to pip.installed is deprecated, '
-                    'and will be removed in Salt Hydrogen (Unreleased). '
+                    'and will be removed in Salt Lithium (Unreleased). '
                     'Please use \'user\' instead.', {'testsuite': ret}
                 )
 
@@ -93,7 +91,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
                 ret = pip_state.removed('pep8', runas='me!')
                 self.assertEqual(
                     'The \'runas\' argument to pip.installed is deprecated, '
-                    'and will be removed in Salt Hydrogen (Unreleased). '
+                    'and will be removed in Salt Lithium (Unreleased). '
                     'Please use \'user\' instead.', str(w[-1].message)
                 )
                 self.assertSaltTrueReturn({'testsuite': ret})
@@ -101,7 +99,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
                 # message?
                 self.assertInSalStatetWarning(
                     'The \'runas\' argument to pip.installed is deprecated, '
-                    'and will be removed in Salt Hydrogen (Unreleased). '
+                    'and will be removed in Salt Lithium (Unreleased). '
                     'Please use \'user\' instead.', {'testsuite': ret}
                 )
 
@@ -321,7 +319,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
 
         # Test VCS installations with version info like >= 0.1
         try:
-            orignal_pip_version = pip.__version__
+            original_pip_version = pip.__version__
             pip.__version__ = MagicMock(
                 side_effect=AttributeError(
                     'Faked missing __version__ attribute'
@@ -353,7 +351,7 @@ class PipStateTest(TestCase, integration.SaltReturnAssertsMixIn):
 
         # Reset the version attribute if existing
         if hasattr(pip, '__version__'):
-            pip.__version__ = orignal_pip_version
+            pip.__version__ = original_pip_version
 
 
 if __name__ == '__main__':

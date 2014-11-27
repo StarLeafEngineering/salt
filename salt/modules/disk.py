@@ -2,15 +2,18 @@
 '''
 Module for gathering disk information
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
 import os
+import re
 
 # Import salt libs
 import salt.utils
 
 from salt.exceptions import CommandExecutionError
+from salt.ext.six.moves import zip
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ def __virtual__():
     '''
     if salt.utils.is_windows():
         return False
-    return 'disk'
+    return True
 
 
 def _clean_flags(args, caller):
@@ -53,7 +56,7 @@ def usage(args=None):
         salt '*' disk.usage
     '''
     flags = _clean_flags(args, 'disk.usage')
-    if not os.path.isfile('/etc/mtab'):
+    if not os.path.isfile('/etc/mtab') and __grains__['kernel'] == 'Linux':
         log.warn('df cannot run without /etc/mtab')
         if __grains__.get('virtual_subtype') == 'LXC':
             log.warn('df command failed and LXC detected. If you are running '
@@ -154,9 +157,11 @@ def inodeusage(args=None):
 
 def percent(args=None):
     '''
-    Return partion information for volumes mounted on this minion
+    Return partition information for volumes mounted on this minion
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' disk.percent /var
     '''
@@ -189,3 +194,32 @@ def percent(args=None):
         return ret[args]
     else:
         return ret
+
+
+def blkid(device=None):
+    '''
+    Return block device attributes: UUID, LABEL, etc.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' disk.blkid
+        salt '*' disk.blkid /dev/sda
+    '''
+    args = ""
+    if device:
+        args = " " + device
+
+    ret = {}
+    for line in __salt__['cmd.run_stdout']('blkid' + args).split('\n'):
+        comps = line.split()
+        device = comps[0][:-1]
+        info = {}
+        device_attributes = re.split(('\"*\"'), line.partition(' ')[2])
+        for key, value in zip(*[iter(device_attributes)]*2):
+            key = key.strip('=').strip(' ')
+            info[key] = value.strip('"')
+        ret[device] = info
+
+    return ret

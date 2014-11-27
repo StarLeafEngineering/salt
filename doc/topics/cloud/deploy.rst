@@ -78,7 +78,7 @@ This is currently considered to be experimental functionality, and may not work
 well with all providers. If you experience problems with Salt Cloud hanging 
 after Salt is deployed, consider using Startup States instead:
 
-http://docs.saltstack.org/en/latest/ref/states/startup.html
+http://docs.saltstack.com/ref/states/startup.html
 
 
 Skipping the Deploy Script
@@ -116,7 +116,7 @@ Or even on the VM's profile settings:
     ubuntu_aws:
       provider: aws
       image: ami-7e2da54e
-      size: Micro Instance
+      size: t1.micro
       deploy: False
 
 
@@ -176,7 +176,7 @@ to pass arguments to the deploy script:
     aws-amazon:
         provider: aws
         image: ami-1624987f
-        size: Micro Instance
+        size: t1.micro
         ssh_username: ec2-user
         script: bootstrap-salt
         script_args: -c /tmp/

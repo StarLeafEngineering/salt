@@ -2,6 +2,7 @@
 '''
 Module for using the locate utilities
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -18,7 +19,7 @@ def __virtual__():
     '''
     if salt.utils.is_windows():
         return False
-    return 'locate'
+    return True
 
 
 def version():

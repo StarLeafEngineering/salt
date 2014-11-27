@@ -2,6 +2,7 @@
 '''
 Use composer to install PHP dependencies for a directory
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -20,9 +21,9 @@ __func_alias__ = {
 
 def __virtual__():
     '''
-    Ensure correct name
+    Always load
     '''
-    return 'composer'
+    return True
 
 
 def _valid_composer(composer):
@@ -49,8 +50,8 @@ def install(dir,
     '''
     Install composer dependencies for a directory.
 
-    If composer has not been installed globally making it avaliable in the
-    system PATH & making it executible, the ``composer`` and ``php`` parameters
+    If composer has not been installed globally making it available in the
+    system PATH & making it executable, the ``composer`` and ``php`` parameters
     will need to be set to the location of the executables.
 
     dir
@@ -62,7 +63,7 @@ def install(dir,
         (i.e. /path/to/composer.phar)
 
     php
-        Location of the php executible to use with composer.
+        Location of the php executable to use with composer.
         (i.e. /usr/bin/php)
 
     runas

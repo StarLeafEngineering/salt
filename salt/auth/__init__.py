@@ -6,6 +6,8 @@ This system allows for authentication to be managed in a module pluggable way
 so that any external authentication system can be used inside of Salt
 '''
 
+from __future__ import absolute_import
+
 # 1. Create auth loader instance
 # 2. Accept arguments as a dict
 # 3. Verify with function introspection
@@ -14,12 +16,14 @@ so that any external authentication system can be used inside of Salt
 # 6. Interface to verify tokens
 
 # Import python libs
+from __future__ import print_function
 import os
 import hashlib
 import time
 import logging
 import random
 import getpass
+from salt.ext.six.moves import input
 
 # Import salt libs
 import salt.config
@@ -75,9 +79,8 @@ class LoadAuth(object):
                 return self.auth[fstr](*fcall['args'], **fcall['kwargs'])
             else:
                 return self.auth[fstr](*fcall['args'])
-        except Exception as exc:
-            err = 'Authentication module threw an exception: {0}'.format(exc)
-            log.critical(err)
+        except Exception:
+            err = 'Authentication module threw an exception. Exception not logged.'
             return False
 
     def time_auth(self, load):
@@ -92,13 +95,31 @@ class LoadAuth(object):
         if f_time > self.max_fail:
             self.max_fail = f_time
         deviation = self.max_fail / 4
-        r_time = random.uniform(
+        r_time = random.SystemRandom().uniform(
                 self.max_fail - deviation,
                 self.max_fail + deviation
                 )
         while start + r_time > time.time():
             time.sleep(0.001)
         return False
+
+    def get_groups(self, load):
+        '''
+        Read in a load and return the groups a user is a member of
+        by asking the appropriate provider
+        '''
+        if 'eauth' not in load:
+            return False
+        fstr = '{0}.groups'.format(load['eauth'])
+        if fstr not in self.auth:
+            return False
+        fcall = salt.utils.format_call(self.auth[fstr], load)
+        try:
+            return self.auth[fstr](*fcall['args'], **fcall['kwargs'])
+        except IndexError:
+            return False
+        except Exception:
+            return None
 
     def mk_token(self, load):
         '''
@@ -108,10 +129,11 @@ class LoadAuth(object):
         if ret is False:
             return {}
         fstr = '{0}.auth'.format(load['eauth'])
-        tok = str(hashlib.md5(os.urandom(512)).hexdigest())
+        hash_type = getattr(hashlib, self.opts.get('hash_type', 'md5'))
+        tok = str(hash_type(os.urandom(512)).hexdigest())
         t_path = os.path.join(self.opts['token_dir'], tok)
         while os.path.isfile(t_path):
-            tok = hashlib.md5(os.urandom(512)).hexdigest()
+            tok = str(hash_type(os.urandom(512)).hexdigest())
             t_path = os.path.join(self.opts['token_dir'], tok)
         fcall = salt.utils.format_call(self.auth[fstr], load)
         tdata = {'start': time.time(),
@@ -119,7 +141,7 @@ class LoadAuth(object):
                  'name': fcall['args'][0],
                  'eauth': load['eauth'],
                  'token': tok}
-        with salt.utils.fopen(t_path, 'w+') as fp_:
+        with salt.utils.fopen(t_path, 'w+b') as fp_:
             fp_.write(self.serial.dumps(tdata))
         return tdata
 
@@ -131,7 +153,7 @@ class LoadAuth(object):
         t_path = os.path.join(self.opts['token_dir'], tok)
         if not os.path.isfile(t_path):
             return {}
-        with salt.utils.fopen(t_path, 'r') as fp_:
+        with salt.utils.fopen(t_path, 'rb') as fp_:
             tdata = self.serial.loads(fp_.read())
         rm_tok = False
         if 'expire' not in tdata:
@@ -163,7 +185,7 @@ class Authorize(object):
 
     def auth_data(self):
         '''
-        Gather and create the autorization data sets
+        Gather and create the authorization data sets
         '''
         auth_data = self.opts['external_auth']
         #for auth_back in self.opts.get('external_auth_sources', []):
@@ -291,11 +313,20 @@ class Resolver(object):
         self.auth = salt.loader.auth(opts)
 
     def _send_token_request(self, load):
-        sreq = salt.payload.SREQ(
-            'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
-            )
-        tdata = sreq.send('clear', load)
-        return tdata
+        if self.opts['transport'] == 'zeromq':
+            sreq = salt.payload.SREQ(
+                    'tcp://{0}:{1}'.format(
+                        salt.utils.ip_bracket(self.opts['interface']),
+                        self.opts['ret_port'])
+                )
+            tdata = sreq.send('clear', load)
+            return tdata
+        elif self.opts['transport'] == 'raet':
+            sreq = salt.transport.Channel.factory(
+                    self.opts)
+            sreq.dst = (None, None, 'local_cmd')
+            tdata = sreq.send(load)
+            return tdata
 
     def cli(self, eauth):
         '''
@@ -319,12 +350,12 @@ class Resolver(object):
             elif arg.startswith('pass'):
                 ret[arg] = getpass.getpass('{0}: '.format(arg))
             else:
-                ret[arg] = raw_input('{0}: '.format(arg))
-        for kwarg, default in args['kwargs'].items():
+                ret[arg] = input('{0}: '.format(arg))
+        for kwarg, default in list(args['kwargs'].items()):
             if kwarg in self.opts:
                 ret['kwarg'] = self.opts[kwarg]
             else:
-                ret[kwarg] = raw_input('{0} [{1}]: '.format(kwarg, default))
+                ret[kwarg] = input('{0} [{1}]: '.format(kwarg, default))
 
         return ret
 
@@ -338,11 +369,14 @@ class Resolver(object):
         tdata = self._send_token_request(load)
         if 'token' not in tdata:
             return tdata
+        oldmask = os.umask(0o177)
         try:
             with salt.utils.fopen(self.opts['token_file'], 'w+') as fp_:
                 fp_.write(tdata['token'])
         except (IOError, OSError):
             pass
+        finally:
+            os.umask(oldmask)
         return tdata
 
     def mk_token(self, load):

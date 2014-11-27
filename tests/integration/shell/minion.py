@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
     :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2012-2013 by the SaltStack Team, see AUTHORS for more details
-    :license: Apache 2.0, see LICENSE for more details.
 
 
     tests.integration.shell.minion
@@ -40,20 +38,21 @@ class MinionTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         config = yaml.load(
             open(self.get_config_file_path(config_file_name), 'r').read()
         )
-        config['log_file'] = 'file:///dev/log/LOG_LOCAL3'
+        config['log_file'] = 'file:///tmp/log/LOG_LOCAL3'
 
         open(os.path.join(config_dir, config_file_name), 'w').write(
             yaml.dump(config, default_flow_style=False)
         )
 
-        self.run_script(
+        ret = self.run_script(
             self._call_binary_,
-            '--config-dir {0} --pid-file {1} -l debug'.format(
+            '--disable-keepalive --config-dir {0} --pid-file {1} -l debug'.format(
                 config_dir,
                 pid_path
             ),
             timeout=5,
-            catch_stderr=True
+            catch_stderr=True,
+            with_retcode=True
         )
 
         # Now kill it if still running
@@ -64,6 +63,10 @@ class MinionTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
                 pass
         try:
             self.assertFalse(os.path.isdir(os.path.join(config_dir, 'file:')))
+            self.assertIn(
+                'Failed to setup the Syslog logging handler', '\n'.join(ret[1])
+            )
+            self.assertEqual(ret[2], 2)
         finally:
             os.chdir(old_cwd)
             if os.path.isdir(config_dir):

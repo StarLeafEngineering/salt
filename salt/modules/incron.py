@@ -2,6 +2,7 @@
 '''
 Work with incron
 '''
+from __future__ import absolute_import
 
 # Import python libs
 import logging
@@ -9,6 +10,7 @@ import os
 
 # Import salt libs
 import salt.utils
+from salt.ext.six.moves import range
 
 # Set up logging
 log = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ def _get_incron_cmdstr(user, path):
     Returns a platform-specific format string, to be used to build a incrontab
     command.
     '''
-    if __grains__['os'] == 'Solaris':
+    if __grains__['os_family'] == 'Solaris':
         return 'su - {0} -c "incrontab {1}"'.format(user, path)
     else:
         return 'incrontab -u {0} {1}'.format(user, path)
@@ -104,7 +106,7 @@ def _write_incron_lines(user, lines):
         path = salt.utils.mkstemp()
         with salt.utils.fopen(path, 'w+') as fp_:
             fp_.writelines(lines)
-        if __grains__['os'] == 'Solaris' and user != "root":
+        if __grains__['os_family'] == 'Solaris' and user != "root":
             __salt__['cmd.run']('chown {0} {1}'.format(user, path))
         ret = __salt__['cmd.run_all'](_get_incron_cmdstr(user, path))
         os.remove(path)
@@ -164,7 +166,7 @@ def raw_incron(user):
 
         salt '*' incron.raw_cron root
     '''
-    if __grains__['os'] == 'Solaris':
+    if __grains__['os_family'] == 'Solaris':
         cmd = 'incrontab -l {0}'.format(user)
     else:
         cmd = 'incrontab -l -u {0}'.format(user)
@@ -230,7 +232,7 @@ def set_job(user, path, mask, cmd):
 
     # Check for valid mask types
     for item in mask.split(','):
-        if not item in _MASK_TYPES:
+        if item not in _MASK_TYPES:
             return 'Invalid mask type: {0}' . format(item)
 
     updated = False
@@ -293,7 +295,7 @@ def rm_job(user,
 
     # Check for valid mask types
     for item in mask.split(','):
-        if not item in _MASK_TYPES:
+        if item not in _MASK_TYPES:
             return 'Invalid mask type: {0}' . format(item)
 
     lst = list_tab(user)

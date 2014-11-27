@@ -1,14 +1,27 @@
+.. _events:
+
+.. index:: ! Event, event bus, event system
+    see: Reactor; Event
+
 =================
 Salt Event System
 =================
 
-Salt 0.9.10 introduced the Salt Event System. This system is used to fire
-off events enabling third party applications or external processes to react
-to behavior within Salt.
+The Salt Event System is used to fire off events enabling third party
+applications or external processes to react to behavior within Salt.
 
-The event system is comprised of a few components, the event sockets which
-publish events, and the event library which can listen to events and send
-events into the salt system.
+The event system is comprised of a two primary components:
+
+    * The event sockets which publishes events.
+    * The event library which can listen to events and send events into the salt system.
+
+Event types
+===========
+
+.. toctree::
+    :maxdepth: 2
+
+    master_events
 
 Listening for Events
 ====================
@@ -30,11 +43,14 @@ The following code will check for a single event:
 
     data = event.get_event()
 
-Events will also use a "tag". A "tag" allows for events to be filtered. By
-default all events will be returned, but if only authentication events are
-desired, then pass the tag "auth". Also, the get_event method has a default
-poll time assigned of 5 seconds, to change this time set the "wait" option.
-This example will only listen for auth events and will wait for 10 seconds
+Events will also use a "tag". Tags allow for events to be filtered by prefix.
+By default all events will be returned. If only authentication events are
+desired, then pass the tag "salt/auth".
+
+The ``get_event`` method has a default poll time assigned of 5 seconds. To
+change this time set the "wait" option.
+
+The following example will only listen for auth events and will wait for 10 seconds
 instead of the default 5.
 
 .. code-block:: python
@@ -43,11 +59,9 @@ instead of the default 5.
 
     event = salt.utils.event.MasterEvent('/var/run/salt/master')
 
-    data = event.get_event(wait=10, tag='auth')
+    data = event.get_event(wait=10, tag='salt/auth')
 
-Instead of looking for a single event, the iter_events method can be used to
-make a generator which will continually yield salt events. The iter_events
-method also accepts a tag, but not a wait time:
+To retrieve the tag as well as the event data, pass ``full=True``:
 
 .. code-block:: python
 
@@ -55,16 +69,35 @@ method also accepts a tag, but not a wait time:
 
     event = salt.utils.event.MasterEvent('/var/run/salt/master')
 
-    for data in event.iter_events(tag='auth'):
+    evdata = event.get_event(wait=10, tag='salt/job', full=True)
+
+    tag, data = evdata['tag'], evdata['data']
+
+    # tag == 'salt/job/JOBID/ret/MINIONNAME
+    
+
+Instead of looking for a single event, the ``iter_events`` method can be used to
+make a generator which will continually yield salt events.
+
+The iter_events method also accepts a tag but not a wait time:
+
+.. code-block:: python
+
+    import salt.utils.event
+
+    event = salt.utils.event.MasterEvent('/var/run/salt/master')
+
+    for data in event.iter_events(tag='salt/auth'):
         print(data)
 
 
 Firing Events
 =============
 
-It is possible to fire events on either the minion's local bus, or to fire
-events intended for the master. To fire a local event from the minion, on the
-command line:
+It is possible to fire events on either the minion's local bus or to fire
+events intended for the master.
+
+To fire a local event from the minion, on the command line:
 
 .. code-block:: bash
 
@@ -79,9 +112,19 @@ To fire an event to be sent to the master, from the minion:
 If a process is listening on the minion, it may be useful for a user on the
 master to fire an event to it:
 
+.. code-block:: python
+
+    # Job on minion
+    import salt.utils.event
+
+    event = salt.utils.event.MinionEvent(**__opts__)
+
+    for evdata in event.iter_events(tag='customtag/'):
+        return evdata # do your processing here...
+
 .. code-block:: bash
 
-    salt minionname event.fire '{"data": "message for the minion"}' 'tag'
+    salt minionname event.fire '{"data": "message for the minion"}' 'customtag/african/unladen'
 
 
 Firing Events From Code
@@ -129,8 +172,8 @@ So long as the salt-master process is running, the master socket can be used:
     sock_dir = '/var/run/salt/master'
 
 This allows 3rd party applications to harness the power of the Salt event bus
-programmatically, without having to make other calls to Salt. A 3rd party
-process can listen to the event bus on the master, and another 3rd party
+programmatically, without having to make other calls to Salt.
+
+A 3rd party process can listen to the event bus on the master and another 3rd party
 process can fire events to the process on the master, which Salt will happily
 pass along.
-
