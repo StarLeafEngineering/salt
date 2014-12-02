@@ -82,8 +82,12 @@ class Caller(object):
             except TypeError as exc:
                 sys.stderr.write(('Passed invalid arguments: {0}\n').format(exc))
                 sys.exit(1)
-            ret['retcode'] = sys.modules[func.__module__].__context__.get(
-                    'retcode', 0)
+            try:
+                modcontext = sys.modules[func.__module__].__context__
+            except AttributeError:
+                ret['retcode'] = 1
+            else:
+                ret['retcode'] = modcontext.get('retcode', 0)
         except (CommandExecutionError) as exc:
             msg = 'Error running \'{0}\': {1}\n'
             active_level = LOG_LEVELS.get(
