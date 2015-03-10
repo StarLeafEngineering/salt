@@ -73,7 +73,8 @@ def __virtual__():
     return False
 
 
-def _run_psql(cmd, runas=None, password=None, host=None, port=None, user=None):
+def _run_psql(cmd, runas=None, password=None, host=None, port=None, user=None,
+              stdin=None):
     '''
     Helper function to call psql, because the password requirement
     makes this too much code to be repeated in each function below
@@ -113,7 +114,7 @@ def _run_psql(cmd, runas=None, password=None, host=None, port=None, user=None):
             __salt__['file.chown'](pgpassfile, runas, '')
             kwargs['env'] = {'PGPASSFILE': pgpassfile}
 
-    ret = __salt__['cmd.run_all'](cmd, python_shell=False, **kwargs)
+    ret = __salt__['cmd.run_all'](cmd, python_shell=False, stdin=stdin, **kwargs)
 
     if ret.get('retcode', 0) != 0:
         log.error('Error connecting to Postgresql server')
@@ -233,13 +234,14 @@ def _psql_prepare_and_run(cmd,
                           maintenance_db=None,
                           password=None,
                           runas=None,
-                          user=None):
+                          user=None,
+                          stdin=None):
     rcmd = _psql_cmd(
         host=host, user=user, port=port,
         maintenance_db=maintenance_db, password=password,
         *cmd)
     cmdret = _run_psql(
-        rcmd, runas=runas, password=password, host=host, port=port, user=user)
+        rcmd, runas=runas, password=password, host=host, port=port, user=user, stdin=stdin)
     return cmdret
 
 
@@ -1816,4 +1818,45 @@ def schema_list(dbname,
             retrow[key] = row[key]
         ret[row['name']] = retrow
 
+    return ret
+
+
+def run_script(source,
+               saltenv='base',
+               dbname=None,
+               host=None,
+               port=None,
+               password=None,
+               runas=None,
+               user=None):
+    '''
+    Run a script on a postgres database using psql -f.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' postgres_ext.run_script salt://script.sql
+
+    source
+        The script to run. Expects a salt URI at the moment
+
+    saltenv
+        The environment to look for the script in (defaults to base)
+
+    dbname
+        The database that we run the script against
+
+    Other args are the same as the configuration
+
+    '''
+
+    script_file = __salt__['cp.cache_file'](source, saltenv=saltenv)
+    with salt.utils.fopen(script_file) as f:
+        script_file_data = f.read()
+    ret = _psql_prepare_and_run(['-f', '-'],
+                                host=host, port=port, maintenance_db=dbname,
+                                password=password, runas=runas, user=user,
+                                stdin=script_file_data,
+                                )
     return ret
