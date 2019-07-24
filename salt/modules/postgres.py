@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 '''
 Module to provide Postgres compatibility to salt.
 
@@ -34,17 +35,26 @@ Module to provide Postgres compatibility to salt.
 # Import python libs
 from __future__ import absolute_import, unicode_literals, print_function
 import datetime
-import logging
 import hashlib
+import io
+import logging
 import os
-import re
 import pipes
+import re
 import tempfile
+from contextlib import contextmanager
+from pwd import getpwnam
+
 try:
     import csv
     HAS_CSV = True
 except ImportError:
     HAS_CSV = False
+try:
+    import psycopg2
+    HAS_PSYCOPG = True
+except ImportError:
+    HAS_PSYCOPG = False
 
 # Import salt libs
 import salt.utils.files
@@ -113,18 +123,24 @@ _PRIVILEGE_TYPE_MAP = {
 }
 
 
+class PsqlArgParsingError(Exception):
+    pass
+
+
 def __virtual__():
     '''
     Only load this module if the psql bin exist.
     initdb bin might also be used, but its presence will be detected on runtime.
     '''
-    utils = ['psql']
     if not HAS_CSV:
-        return False
-    for util in utils:
-        if not salt.utils.path.which(util):
-            if not _find_pg_binary(util):
-                return (False, '{0} was not found'.format(util))
+        return (False, 'The postgres execution module failed to load: '
+                       'the csv library is not available')
+
+    # Require at least one of psql and psycopg2
+    if not salt.utils.path.which('psql') and not _find_pg_binary('psql') and not HAS_PSYCOPG:
+        return (False, 'The postgres execution module failed to load: '
+                       'psql was not found and psycopg2 is not installed')
+
     return True
 
 
@@ -271,17 +287,26 @@ def version(user=None, host=None, port=None, maintenance_db=None,
 
         salt '*' postgres.version
     '''
+
     query = 'SELECT setting FROM pg_catalog.pg_settings ' \
             'WHERE name = \'server_version\''
-    cmd = _psql_cmd('-c', query,
-                    '-t',
-                    host=host,
-                    user=user,
-                    port=port,
-                    maintenance_db=maintenance_db,
-                    password=password)
-    ret = _run_psql(
-        cmd, runas=runas, password=password, host=host, port=port, user=user)
+
+    if HAS_PSYCOPG:
+        ret = _psycopg_run_command(
+            query, db_name=maintenance_db, host=host, port=port, user=user, password=password,
+            runas=runas
+        )
+
+    else:
+        cmd = _psql_cmd('-c', query,
+                        '-t',
+                        host=host,
+                        user=user,
+                        port=port,
+                        maintenance_db=maintenance_db,
+                        password=password)
+        ret = _run_psql(
+            cmd, runas=runas, password=password, host=host, port=port, user=user)
 
     for line in salt.utils.itertools.split(ret['stdout'], '\n'):
         # Just return the first line
@@ -327,6 +352,13 @@ def _connection_defaults(user=None, host=None, port=None, maintenance_db=None):
     if not maintenance_db:
         maintenance_db = __salt__['config.option']('postgres.maintenance_db')
 
+    # Default the values for psycopg2 if not set by salt config
+    if HAS_PSYCOPG:
+        if not user:
+            user = 'postgres'
+        if not maintenance_db:
+            maintenance_db = 'postgres'
+
     return (user, host, port, maintenance_db)
 
 
@@ -348,6 +380,7 @@ def _psql_cmd(*args, **kwargs):
            '--no-align',
            '--no-readline',
            '--no-psqlrc',
+           '-vON_ERROR_STOP=1',
            '--no-password']  # Never prompt, handled in _run_psql.
     if user:
         cmd += ['--username', user]
@@ -362,6 +395,31 @@ def _psql_cmd(*args, **kwargs):
     return cmd
 
 
+def _parse_psql_flags_for_cmd(cmd):
+    it = iter(cmd)
+    for x in it:
+        # Execute command - return the command
+        if x == '-c':
+            return next(it)
+
+        # Execute script - return the script file contents
+        elif x == '-f':
+            with salt.utils.files.fopen(next(it)) as f:
+                script_file_data = f.read()
+            return script_file_data
+
+        # Ignore set parameter flags
+        elif x == '-v':
+            y = next(it)
+            log.debug("Ignoring psql command line flag: -v {0}".format(y))
+
+        # Raise error for unhandled flag
+        else:
+            raise PsqlArgParsingError("Unable to parse unknown flag: {0}".format(x))
+
+    raise SaltInvocationError("No command or file was given to psql in {0}".format(cmd))
+
+
 def _psql_prepare_and_run(cmd,
                           host=None,
                           port=None,
@@ -369,6 +427,23 @@ def _psql_prepare_and_run(cmd,
                           password=None,
                           runas=None,
                           user=None):
+
+    if HAS_PSYCOPG:
+        try:
+            cmd = _parse_psql_flags_for_cmd(cmd)
+            return _psycopg_run_command(
+                cmd,
+                host=host,
+                port=port,
+                db_name=maintenance_db,
+                password=password,
+                user=user,
+                runas=runas,
+            )
+        except PsqlArgParsingError:
+            # If parsing the arguments in cmd failed, fall back on psql
+            pass
+
     rcmd = _psql_cmd(
         host=host, user=user, port=port,
         maintenance_db=maintenance_db,
@@ -436,6 +511,7 @@ def psql_query(query, user=None, host=None, port=None, maintenance_db=None,
                                    host=host, user=user, port=port,
                                    maintenance_db=maintenance_db,
                                    password=password)
+
     if cmdret['retcode'] > 0:
         return ret
 
@@ -612,10 +688,15 @@ def db_alter(name, user=None, host=None, port=None, maintenance_db=None,
                 name, tablespace
             ))
         for query in queries:
-            ret = _psql_prepare_and_run(['-c', query],
-                                        user=user, host=host, port=port,
-                                        maintenance_db=maintenance_db,
-                                        password=password, runas=runas)
+            if HAS_PSYCOPG:
+                ret = _psycopg_run_command(query, user=user, host=host, port=port,
+                                           db_name=maintenance_db, password=password,
+                                           runas=runas)
+            else:
+                ret = _psql_prepare_and_run(['-c', query],
+                                            user=user, host=host, port=port,
+                                            maintenance_db=maintenance_db,
+                                            password=password, runas=runas)
 
     if ret['retcode'] != 0:
         return False
@@ -3236,7 +3317,7 @@ def run_script(source, saltenv='base', dbname=None, host=None, port=None,
     """
 
     script_file = __salt__['cp.cache_file'](source, saltenv=saltenv)
-    with salt.utils.fopen(script_file) as f:
+    with salt.utils.files.fopen(script_file) as f:
         script_file_data = f.read()
 
     return _psql_prepare_and_run(
@@ -3248,3 +3329,141 @@ def run_script(source, saltenv='base', dbname=None, host=None, port=None,
             password=password,
             runas=runas,
     )
+
+
+@contextmanager
+def _psycopg_get_cursor(db_name=None, host=None, port=None, runas=None, user=None, password=None):
+    """
+    Get back a psycopg2 cursor for the connection to the db specified.
+    - Connections are stored in the __context__ dictionary to persist across usage of this module.
+    - Will open a new connection to the db if it cannot find one cached.
+    - The cursor returned is in autocommit mode and first sets the datestyle to a specific format.
+
+    Returns None and does not cache if the connection failed.
+    """
+    (user, host, port, db_name) = _connection_defaults(
+        maintenance_db=db_name,
+        host=host, port=port,
+        user=user,
+    )
+
+    if runas is None:
+        if not host:
+            host = __salt__['config.option']('postgres.host')
+        if not host or host.startswith('/'):
+            if 'FreeBSD' in __grains__['os_family']:
+                runas = 'pgsql'
+            elif 'OpenBSD' in __grains__['os_family']:
+                runas = '_postgresql'
+            else:
+                runas = 'postgres'
+
+    if user is None:
+        user = runas
+
+    # Create connection and store in context if not already there
+    db_conn_key = _psycopg_get_db_conn_key(db_name=db_name, host=host, port=port, user=user)
+
+    orig_uid = os.geteuid()
+    try:
+        if runas is not None:
+            os.seteuid(getpwnam(runas).pw_uid)
+        if db_conn_key not in __context__:
+            conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host,
+                                    port=port)
+            conn.set_session(autocommit=True)
+
+            # Set the datestyle for the connection
+            cur = conn.cursor()
+            cur.execute("SET DateStyle='ISO,MDY'")
+
+            __context__[db_conn_key] = conn
+
+        conn = __context__[db_conn_key]
+        cur = conn.cursor()
+
+        yield cur
+    finally:
+        os.seteuid(orig_uid)
+
+
+def _psycopg_get_db_conn_key(db_name, host, port, user):
+    return "db=" + str(db_name) + ",user=" + str(user) + ",host=" + str(host) + ",port=" + str(port)
+
+
+def _psycopg_run_command(cmd, db_name=None, host=None, port=None, runas=None, user=None, password=None):
+    # Copy commands must be handled by specific psycopg2 methods
+    try:
+        with _psycopg_get_cursor(db_name=db_name, host=host, port=port, runas=runas, user=user, password=password) as cur:
+            if re.match('COPY.+', cmd):
+                return _psycopg_run_copy(cur, cmd)
+            else:
+                return _psycopg_run_statement(cur, cmd)
+
+    except psycopg2.OperationalError as ex:
+        log.error("Failed to connect to {}@{}:{}/{} runas: {} with psycopg2: {}".format(
+            user, host, port, db_name, runas, ex,
+        ))
+        return {'retcode': -1, 'stdout': 'Failed to connect to db'}
+
+
+def _psycopg_run_statement(cur, cmd):
+    try:
+        cur.execute(cmd)
+        success = 0
+    except psycopg2.Error as e:
+        log.error(str(e))
+        success = -1
+    # See if there were any results in case of query
+    res = cur.statusmessage
+    log.info("Psycopg retcode: {} result: {}".format(success, res))
+    if "SELECT" in res:
+        res = _psycopg_format_as_psql_output(cur.fetchall())
+    return {'retcode': success, 'stdout': res}
+
+
+def _psycopg_run_copy(cur, cmd):
+    if re.match('COPY.+TO STDOUT WITH.+', cmd) is None:
+        log.error('Support for this COPY query is not implemented. See psycopg2 docs for how to.')
+        return {'retcode': -1}
+    tmp_file = io.StringIO()
+    try:
+        cur.copy_expert(cmd, tmp_file)
+        success = 0
+    except psycopg2.Error as e:
+        log.error(str(e))
+        success = -1
+    res = tmp_file.getvalue()
+    tmp_file.close()
+    log.info("psycopg copy command retcode: {}".format(success))
+    return {'retcode': success, 'stdout': res}
+
+
+def _psycopg_format_as_psql_output(rows):
+    """
+    Format the output from a psycopg2 fetch (a list of rows) as if it were returned from the
+    psql command line. THIS ONLY WORKS FOR A LIMITED NUMBER OF CASES.
+    """
+
+    output = ''
+    if len(rows) > 0:
+        if rows[0] == (True,):
+            output = "exists\n"
+            output += len(rows) * "t\n"
+
+        elif rows[0] == (False,):
+            output = "exists\n"
+            output += len(rows) * "f\n"
+
+        else:
+            output = 'val\n'
+            for row in rows:
+                output += row[0]
+                output += "\n"
+
+    # Append the number of rows fetched
+    num_rows = len(rows)
+    row_or_rows = ' row' if num_rows == 1 else ' rows'
+    footer = "(" + str(num_rows) + row_or_rows + ")"
+
+    return output + footer
