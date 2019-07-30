@@ -3625,3 +3625,76 @@ def datadir_exists(name):
     _config_file = os.path.join(name, "postgresql.conf")
 
     return os.path.isfile(_version_file) and os.path.isfile(_config_file)
+
+
+# Running general sql commands
+
+def run_command(cmd, dbname=None, host=None, port=None,
+                user=None, password=None, runas=None):
+    """
+    Run a command on a postgres database, using psycopg2 if installed.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' postgres_ext.run_command 'create table foo()'
+
+    cmd
+        The single sql statement to run
+
+    dbname
+        The database that we run the script against
+
+    Other args are the same as the configuration
+
+    """
+
+    return _psql_prepare_and_run(
+        ['-c', cmd],
+        maintenance_db=dbname,
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        runas=runas,
+    )
+
+
+def run_script(source, saltenv='base', dbname=None, host=None, port=None,
+               user=None, password=None, runas=None):
+    """
+    Run a script on a postgres database, using psycopg2 if installed.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' postgres_ext.run_script salt://script.sql
+
+    source
+        The script to run. Expects a salt URI at the moment
+
+    saltenv
+        The environment to look for the script in (defaults to base)
+
+    dbname
+        The database that we run the script against
+
+    Other args are the same as the configuration
+
+    """
+
+    script_file = __salt__['cp.cache_file'](source, saltenv=saltenv)
+    with salt.utils.fopen(script_file) as f:
+        script_file_data = f.read()
+
+    return _psql_prepare_and_run(
+            ['-c', script_file_data],
+            maintenance_db=dbname,
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            runas=runas,
+    )
