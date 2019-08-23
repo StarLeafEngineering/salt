@@ -3328,9 +3328,11 @@ def _psycopg_get_cursor(db_name=None, host=None, port=None, user=None, password=
 
     Returns None and does not cache if the connection failed.
     """
-    (user, host, port, db_name, password) = _connection_defaults(maintenance_db=db_name,
-                                                                 host=host, port=port,
-                                                                 user=user, password=password)
+    (user, host, port, db_name) = _connection_defaults(
+        maintenance_db=db_name,
+        host=host, port=port,
+        user=user,
+    )
 
     # Create connection and store in context if not already there
     db_conn_key = _psycopg_get_db_conn_key(db_name=db_name, host=host, port=port, user=user)
