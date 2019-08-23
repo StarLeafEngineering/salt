@@ -42,6 +42,9 @@ import os
 import pipes
 import re
 import tempfile
+from contextlib import contextmanager
+from pwd import getpwnam
+
 try:
     import csv
     HAS_CSV = True
@@ -289,7 +292,10 @@ def version(user=None, host=None, port=None, maintenance_db=None,
             'WHERE name = \'server_version\''
 
     if HAS_PSYCOPG:
-        ret = _psycopg_run_command(query, db_name=maintenance_db, host=host, port=port, user=user, password=password)
+        ret = _psycopg_run_command(
+            query, db_name=maintenance_db, host=host, port=port, user=user, password=password,
+            runas=runas
+        )
 
     else:
         cmd = _psql_cmd('-c', query,
@@ -424,12 +430,15 @@ def _psql_prepare_and_run(cmd,
     if HAS_PSYCOPG:
         try:
             cmd = _parse_psql_flags_for_cmd(cmd)
-            return _psycopg_run_command(cmd,
-                                        host=host,
-                                        port=port,
-                                        db_name=maintenance_db,
-                                        password=password,
-                                        user=user)
+            return _psycopg_run_command(
+                cmd,
+                host=host,
+                port=port,
+                db_name=maintenance_db,
+                password=password,
+                user=user,
+                runas=runas,
+            )
         except PsqlArgParsingError:
             # If parsing the arguments in cmd failed, fall back on psql
             pass
@@ -680,7 +689,8 @@ def db_alter(name, user=None, host=None, port=None, maintenance_db=None,
         for query in queries:
             if HAS_PSYCOPG:
                 ret = _psycopg_run_command(query, user=user, host=host, port=port,
-                                           db_name=maintenance_db, password=password)
+                                           db_name=maintenance_db, password=password,
+                                           runas=runas)
             else:
                 ret = _psql_prepare_and_run(['-c', query],
                                             user=user, host=host, port=port,
@@ -3319,7 +3329,8 @@ def run_script(source, saltenv='base', dbname=None, host=None, port=None,
     )
 
 
-def _psycopg_get_cursor(db_name=None, host=None, port=None, user=None, password=None):
+@contextmanager
+def _psycopg_get_cursor(db_name=None, host=None, port=None, runas=None, user=None, password=None):
     """
     Get back a psycopg2 cursor for the connection to the db specified.
     - Connections are stored in the __context__ dictionary to persist across usage of this module.
@@ -3334,11 +3345,27 @@ def _psycopg_get_cursor(db_name=None, host=None, port=None, user=None, password=
         user=user,
     )
 
+    if runas is None:
+        if not host:
+            host = __salt__['config.option']('postgres.host')
+        if not host or host.startswith('/'):
+            if 'FreeBSD' in __grains__['os_family']:
+                runas = 'pgsql'
+            elif 'OpenBSD' in __grains__['os_family']:
+                runas = '_postgresql'
+            else:
+                runas = 'postgres'
+
+    if user is None:
+        user = runas
+
     # Create connection and store in context if not already there
     db_conn_key = _psycopg_get_db_conn_key(db_name=db_name, host=host, port=port, user=user)
 
-    if db_conn_key not in __context__:
-        try:
+    orig_uid = os.geteuid()
+    try:
+        os.seteuid(getpwnam(runas).pw_uid)
+        if db_conn_key not in __context__:
             conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host,
                                     port=port)
             conn.set_session(autocommit=True)
@@ -3347,57 +3374,53 @@ def _psycopg_get_cursor(db_name=None, host=None, port=None, user=None, password=
             cur = conn.cursor()
             cur.execute("SET DateStyle='ISO,MDY'")
 
-        except psycopg2.OperationalError:
-            return None
+            __context__[db_conn_key] = conn
 
-        __context__[db_conn_key] = conn
+        conn = __context__[db_conn_key]
+        cur = conn.cursor()
 
-    conn = __context__[db_conn_key]
-    cur = conn.cursor()
-
-    return cur
+        yield cur
+    finally:
+        os.seteuid(orig_uid)
 
 
 def _psycopg_get_db_conn_key(db_name, host, port, user):
     return "db=" + str(db_name) + ",user=" + str(user) + ",host=" + str(host) + ",port=" + str(port)
 
 
-def _psycopg_run_command(cmd, db_name=None, host=None, port=None, user=None, password=None):
+def _psycopg_run_command(cmd, db_name=None, host=None, port=None, runas=None, user=None, password=None):
     # Copy commands must be handled by specific psycopg2 methods
-    if re.match('COPY.+', cmd):
-        return _psycopg_run_copy(cmd, db_name=db_name, host=host, port=port,
-                                 user=user, password=password)
+    try:
+        with _psycopg_get_cursor(db_name=db_name, host=host, port=port, runas=runas, user=user, password=password) as cur:
+            if re.match('COPY.+', cmd):
+                return _psycopg_run_copy(cur, cmd)
+            else:
+                return _psycopg_run_statement(cur, cmd)
 
-    cur = _psycopg_get_cursor(db_name=db_name, host=host, port=port, user=user, password=password)
-    if cur is None:
+    except psycopg2.OperationalError as ex:
+        log.error("Failed to connect to db {} with psycopg2: {}".format(db_conn_key, ex))
         return {'retcode': -1, 'stdout': 'Failed to connect to db'}
 
+
+def _psycopg_run_statement(cur, cmd):
     try:
         cur.execute(cmd)
         success = 0
     except psycopg2.Error as e:
         log.error(str(e))
         success = -1
-
     # See if there were any results in case of query
     res = cur.statusmessage
+    log.info("Psycopg retcode: {} result: {}".format(success, res))
     if "SELECT" in res:
         res = _psycopg_format_as_psql_output(cur.fetchall())
-
     return {'retcode': success, 'stdout': res}
 
 
-def _psycopg_run_copy(cmd, db_name=None, host=None, port=None, user=None, password=None):
-    # Only one specific format of copy command is currently supported
+def _psycopg_run_copy(cur, cmd):
     if re.match('COPY.+TO STDOUT WITH.+', cmd) is None:
         log.error('Support for this COPY query is not implemented. See psycopg2 docs for how to.')
         return {'retcode': -1}
-
-    cur = _psycopg_get_cursor(db_name=db_name, host=host, port=port, user=user, password=password)
-    if cur is None:
-        return {'retcode': -1, 'stdout': 'Failed to connect to db'}
-
-    # Create in memory file to copy results to
     tmp_file = io.StringIO()
     try:
         cur.copy_expert(cmd, tmp_file)
@@ -3405,10 +3428,9 @@ def _psycopg_run_copy(cmd, db_name=None, host=None, port=None, user=None, passwo
     except psycopg2.Error as e:
         log.error(str(e))
         success = -1
-
     res = tmp_file.getvalue()
     tmp_file.close()
-
+    log.info("psycopg copy command retcode: {}".format(success))
     return {'retcode': success, 'stdout': res}
 
 
