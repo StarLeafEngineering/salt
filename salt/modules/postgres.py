@@ -380,6 +380,7 @@ def _psql_cmd(*args, **kwargs):
            '--no-align',
            '--no-readline',
            '--no-psqlrc',
+           '-v ON_ERROR_STOP=1',
            '--no-password']  # Never prompt, handled in _run_psql.
     if user:
         cmd += ['--username', user]
@@ -3398,7 +3399,9 @@ def _psycopg_run_command(cmd, db_name=None, host=None, port=None, runas=None, us
                 return _psycopg_run_statement(cur, cmd)
 
     except psycopg2.OperationalError as ex:
-        log.error("Failed to connect to db {} with psycopg2: {}".format(db_conn_key, ex))
+        log.error("Failed to connect to {}@{}:{}/{} runas: {} with psycopg2: {}".format(
+            user, host, port, db_name, runas, ex,
+        ))
         return {'retcode': -1, 'stdout': 'Failed to connect to db'}
 
 
