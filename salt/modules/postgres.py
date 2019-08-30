@@ -3365,7 +3365,8 @@ def _psycopg_get_cursor(db_name=None, host=None, port=None, runas=None, user=Non
 
     orig_uid = os.geteuid()
     try:
-        os.seteuid(getpwnam(runas).pw_uid)
+        if runas is not None:
+            os.seteuid(getpwnam(runas).pw_uid)
         if db_conn_key not in __context__:
             conn = psycopg2.connect(dbname=db_name, user=user, password=password, host=host,
                                     port=port)
