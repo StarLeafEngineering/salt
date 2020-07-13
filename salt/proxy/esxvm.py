@@ -152,6 +152,8 @@ import logging
 import os
 
 # Import Salt Libs
+from copy import deepcopy
+
 import salt.exceptions as excs
 from salt.utils.dictupdate import merge
 
@@ -185,7 +187,7 @@ def init(opts):
     """
     log.debug("Initting esxvm proxy module in process %s", os.getpid())
     log.debug("Validating esxvm proxy input")
-    proxy_conf = merge(opts.get("proxy", {}), __pillar__.get("proxy", {}))
+    proxy_conf = merge(deepcopy(opts.get("proxy", {})), __pillar__.get("proxy", {}))
     log.trace("proxy_conf = %s", proxy_conf)
     # TODO json schema validation
 
