@@ -87,8 +87,7 @@ def merge_list(obj_a, obj_b):
 
 
 def merge_recurse(obj_a, obj_b, merge_lists=False):
-    copied = copy.deepcopy(obj_a)
-    return update(copied, obj_b, merge_lists=merge_lists)
+    return update(obj_a, obj_b, merge_lists=merge_lists)
 
 
 def merge_aggregate(obj_a, obj_b):

@@ -493,7 +493,7 @@ def get(
             "pillar_merge_lists"
         )
 
-        data = copy.copy(DEFAULTS)
+        data = copy.deepcopy(DEFAULTS)
         data = salt.utils.dictupdate.merge(
             data, __pillar__.get("master", {}), strategy=merge, merge_lists=merge_lists
         )

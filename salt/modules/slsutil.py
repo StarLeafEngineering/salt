@@ -10,6 +10,8 @@ import os
 import textwrap
 
 # Import Salt libs
+from copy import deepcopy
+
 import salt.exceptions
 import salt.loader
 import salt.template
@@ -52,7 +54,7 @@ def merge(obj_a, obj_b, strategy="smart", renderer="yaml", merge_lists=False):
 
         salt '*' slsutil.merge '{foo: Foo}' '{bar: Bar}'
     """
-    return salt.utils.dictupdate.merge(obj_a, obj_b, strategy, renderer, merge_lists)
+    return salt.utils.dictupdate.merge(deepcopy(obj_a), obj_b, strategy, renderer, merge_lists)
 
 
 def merge_all(lst, strategy="smart", renderer="yaml", merge_lists=False):
@@ -84,7 +86,7 @@ def merge_all(lst, strategy="smart", renderer="yaml", merge_lists=False):
 
     ret = {}
     for obj in lst:
-        ret = salt.utils.dictupdate.merge(ret, obj, strategy, renderer, merge_lists)
+        ret = salt.utils.dictupdate.merge(ret, deepcopy(obj), strategy, renderer, merge_lists)
 
     return ret
 
