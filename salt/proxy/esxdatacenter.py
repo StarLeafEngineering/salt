@@ -148,6 +148,8 @@ Look there to find an example structure for Pillar as well as an example
 import logging
 import os
 
+from copy import deepcopy
+
 import salt.exceptions
 from salt.config.schemas.esxdatacenter import EsxdatacenterProxySchema
 from salt.utils.dictupdate import merge
@@ -193,7 +195,7 @@ def init(opts):
     log.trace("Validating esxdatacenter proxy input")
     schema = EsxdatacenterProxySchema.serialize()
     log.trace("schema = %s", schema)
-    proxy_conf = merge(opts.get("proxy", {}), __pillar__.get("proxy", {}))
+    proxy_conf = merge(deepcopy(opts.get("proxy", {})), __pillar__.get("proxy", {}))
     log.trace("proxy_conf = %s", proxy_conf)
     try:
         jsonschema.validate(proxy_conf, schema)

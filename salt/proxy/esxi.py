@@ -272,6 +272,7 @@ for standing up an ESXi host from scratch.
 
 import logging
 import os
+from copy import deepcopy
 
 from salt.config.schemas.esxi import EsxiProxySchema
 from salt.exceptions import InvalidConfigError, SaltSystemExit
@@ -318,7 +319,7 @@ def init(opts):
     log.debug("Validating esxi proxy input")
     schema = EsxiProxySchema.serialize()
     log.trace("esxi_proxy_schema = %s", schema)
-    proxy_conf = merge(opts.get("proxy", {}), __pillar__.get("proxy", {}))
+    proxy_conf = merge(deepcopy(opts.get("proxy", {})), __pillar__.get("proxy", {}))
     log.trace("proxy_conf = %s", proxy_conf)
     try:
         jsonschema.validate(proxy_conf, schema)

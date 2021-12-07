@@ -184,6 +184,8 @@ host.
 import logging
 import os
 
+from copy import deepcopy
+
 import salt.exceptions
 from salt.config.schemas.vcenter import VCenterProxySchema
 from salt.utils.dictupdate import merge
@@ -230,7 +232,7 @@ def init(opts):
     log.trace("VCenter Proxy Validating vcenter proxy input")
     schema = VCenterProxySchema.serialize()
     log.trace("schema = %s", schema)
-    proxy_conf = merge(opts.get("proxy", {}), __pillar__.get("proxy", {}))
+    proxy_conf = merge(deepcopy(opts.get("proxy", {})), __pillar__.get("proxy", {}))
     log.trace("proxy_conf = %s", proxy_conf)
     try:
         jsonschema.validate(proxy_conf, schema)

@@ -80,6 +80,12 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+def _make_master_daemon_runner_client(opts):
+    ropts = dict(opts)
+    ropts["quiet"] = True
+    return salt.runner.RunnerClient(ropts)
+
+
 class SMaster:
     """
     Create a simple salt-master, this will generate the top-level master
@@ -156,9 +162,7 @@ class Maintenance(salt.utils.process.SignalHandlingProcess):
         errors like "WARNING: Mixing fork() and threads detected; memory leaked."
         """
         # Load Runners
-        ropts = dict(self.opts)
-        ropts["quiet"] = True
-        runner_client = salt.runner.RunnerClient(ropts)
+        runner_client = _make_master_daemon_runner_client(self.opts)
         # Load Returners
         self.returners = salt.loader.returners(self.opts, {})
 
@@ -2002,7 +2006,7 @@ class ClearFuncs(TransportMethods):
         # Authorized. Do the job!
         try:
             fun = clear_load.pop("fun")
-            runner_client = salt.runner.RunnerClient(self.opts)
+            runner_client = _make_master_daemon_runner_client(self.opts)
             return runner_client.asynchronous(
                 fun, clear_load.get("kwarg", {}), username, local=True
             )

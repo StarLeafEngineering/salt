@@ -1006,7 +1006,7 @@ class Pillar:
         Extract the sls pillar files from the matches and render them into the
         pillar
         """
-        pillar = copy.copy(self.pillar_override)
+        pillar = copy.deepcopy(self.pillar_override)
         if errors is None:
             errors = []
         for saltenv, pstates in matches.items():
@@ -1127,15 +1127,6 @@ class Pillar:
             log.critical(errors[-1])
             return pillar, errors
         ext = None
-        # Bring in CLI pillar data
-        if self.pillar_override:
-            pillar = merge(
-                pillar,
-                self.pillar_override,
-                self.merge_strategy,
-                self.opts.get("renderer", "yaml"),
-                self.opts.get("pillar_merge_lists", False),
-            )
 
         for run in self.opts["ext_pillar"]:
             if not isinstance(run, dict):
@@ -1182,12 +1173,12 @@ class Pillar:
         top, top_errors = self.get_top()
         if ext:
             if self.opts.get("ext_pillar_first", False):
-                self.opts["pillar"], errors = self.ext_pillar(self.pillar_override)
+                self.opts["pillar"], errors = self.ext_pillar(copy.deepcopy(self.pillar_override))
                 self.rend = salt.loader.render(self.opts, self.functions)
                 matches = self.top_matches(top, reload=True)
                 pillar, errors = self.render_pillar(matches, errors=errors)
                 pillar = merge(
-                    self.opts["pillar"],
+                    copy.deepcopy(self.opts["pillar"]),
                     pillar,
                     self.merge_strategy,
                     self.opts.get("renderer", "yaml"),
@@ -1209,7 +1200,7 @@ class Pillar:
             pillar["master"] = mopts
         if "pillar" in self.opts and self.opts.get("ssh_merge_pillar", False):
             pillar = merge(
-                self.opts["pillar"],
+                copy.deepcopy(self.opts["pillar"]),
                 pillar,
                 self.merge_strategy,
                 self.opts.get("renderer", "yaml"),
